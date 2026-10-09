@@ -24,6 +24,7 @@
     "./docs": "./src/docs/index.ts",
     "./docs/doc-links": "./src/docs/doc-links.ts",
     "./config/types": "./src/config/types.ts",
+    "./config/namespace": "./src/config/namespace.mjs",
     "./credentials": "./src/credentials/index.ts",
     "./mcp": "./src/mcp/index.ts",
     "./prompts": "./src/prompts/index.ts",

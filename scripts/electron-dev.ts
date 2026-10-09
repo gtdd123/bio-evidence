@@ -77,6 +77,7 @@ async function ensureBundledUvForCurrentPlatform(): Promise<void> {
 // Multi-instance detection (matches detect-instance.sh logic)
 // Detects instance number from folder name suffix (e.g., craft-agents-1 → instance 1)
 function detectInstance(): void {
+  if (process.env.BIOEVIDENCE_MODE === '1') return;
   // Don't override if already set (e.g., by sourcing detect-instance.sh first)
   if (process.env.CRAFT_VITE_PORT) return;
 

@@ -15,6 +15,7 @@
  */
 
 import { autoUpdater } from 'electron-updater'
+import { isBioEvidenceMode, resolveConfigDir } from '@craft-agent/shared/config/namespace'
 import { app, BrowserWindow } from 'electron'
 import { platform } from 'os'
 import * as path from 'path'
@@ -40,6 +41,7 @@ const IS_WINDOWS = PLATFORM === 'win32'
 // - macOS: ~/Library/Caches/{appName}-updater/pending
 // - Linux: ~/.cache/{appName}-updater/pending
 function getUpdateCacheDir(): string {
+  if (isBioEvidenceMode()) return path.join(resolveConfigDir(), 'updates', 'pending')
   const appName = app.getName()
   if (IS_MAC) {
     return path.join(app.getPath('home'), 'Library', 'Caches', `${appName}-updater`, 'pending')

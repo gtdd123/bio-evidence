@@ -12,7 +12,7 @@ import {
   rmSync,
   statSync,
 } from 'fs';
-import { homedir } from 'os';
+import { getGlobalSkillsDir } from '../config/namespace.mjs';
 import { join } from 'path';
 import matter from 'gray-matter';
 import type { LoadedSkill, SkillMetadata, SkillSource } from './types.ts';
@@ -30,7 +30,7 @@ import {
 // ============================================================
 
 /** Global agent skills directory: ~/.agents/skills/ */
-export const GLOBAL_AGENT_SKILLS_DIR = join(homedir(), '.agents', 'skills');
+export const GLOBAL_AGENT_SKILLS_DIR = getGlobalSkillsDir();
 
 /** Project-level agent skills relative directory name */
 export const PROJECT_AGENT_SKILLS_DIR = '.agents/skills';

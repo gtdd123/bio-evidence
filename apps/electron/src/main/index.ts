@@ -1,7 +1,9 @@
+import './bio-bootstrap.mjs'
+import { isBioEvidenceMode, resolveConfigDir } from '@craft-agent/shared/config/namespace'
 // Load user's shell environment first (before other imports that may use env)
 // This ensures tools like Homebrew, nvm, etc. are available to the agent
 import { loadShellEnv } from './shell-env'
-loadShellEnv()
+if (!isBioEvidenceMode()) loadShellEnv()
 
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, nativeTheme, shell } from 'electron'
 import { createHash, randomUUID } from 'crypto'
@@ -666,7 +668,7 @@ app.whenReady().then(async () => {
             sessionManager: sm,
             credentialManager: getCredentialManager(),
             getMessagingDir: (wsId: string) =>
-              join(homedir(), '.craft-agent', 'workspaces', wsId, 'messaging'),
+              join(resolveConfigDir(), 'workspaces', wsId, 'messaging'),
             getLegacyMessagingDir: (wsId: string) => {
               const ws = getWorkspaces().find((w) => w.id === wsId)
               return ws ? join(ws.rootPath, 'messaging') : undefined

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { appendFile, mkdir } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { homedir } from 'node:os'
+import { isBioEvidenceMode, resolveConfigDir } from '@craft-agent/shared/config/namespace'
 import type { Logger } from '../runtime/platform'
 
 export interface PrivilegedExecutionRequest {
@@ -22,7 +22,7 @@ interface PendingPrivilegedRequest extends PrivilegedExecutionRequest {
 }
 
 const DEFAULT_APPROVAL_TTL_SECONDS = 120
-const AUDIT_LOG_PATH = join(homedir(), '.craft-agent', 'logs', 'privileged-actions.jsonl')
+const AUDIT_LOG_PATH = join(resolveConfigDir(), 'logs', 'privileged-actions.jsonl')
 
 /**
  * PrivilegedExecutionBroker
@@ -176,9 +176,12 @@ export class PrivilegedExecutionBroker {
   }
 
   private async appendAudit(payload: Record<string, unknown>): Promise<void> {
+    // Commands, reasons and arbitrary tool arguments may contain credentials.
+    // BioEvidence diagnostics record only fixed event identifiers and timing.
+    const safePayload = isBioEvidenceMode() ? { event: typeof payload.event === 'string' && /^privileged_[a-z_]+$/.test(payload.event) ? payload.event : 'privileged_event' } : payload
     try {
       await mkdir(dirname(AUDIT_LOG_PATH), { recursive: true })
-      await appendFile(AUDIT_LOG_PATH, `${JSON.stringify({ timestamp: new Date().toISOString(), ...payload })}\n`, 'utf8')
+      await appendFile(AUDIT_LOG_PATH, `${JSON.stringify({ timestamp: new Date().toISOString(), ...safePayload })}\n`, 'utf8')
     } catch (error) {
       this.logger.warn('[PrivilegedExecutionBroker] Failed to write audit log:', error)
     }

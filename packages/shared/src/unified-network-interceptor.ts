@@ -32,6 +32,7 @@ import {
 } from './interceptor-common.ts';
 import { FEATURE_FLAGS } from './feature-flags.ts';
 import { resolveRequestContext } from './interceptor-request-utils.ts';
+import { isBioEvidenceMode } from './config/namespace.mjs';
 
 // Type alias for fetch's HeadersInit
 type HeadersInitType = Headers | Record<string, string> | string[][];
@@ -43,7 +44,7 @@ type HeadersInitType = Headers | Record<string, string> | string[][];
  * Independent of the broader DEBUG flag — opt-in only because raw chunks are
  * verbose and may contain user prompts/tool args.
  */
-const DEBUG_SSE_RAW = process.env.CRAFT_DEBUG_SSE_RAW === '1';
+const DEBUG_SSE_RAW = !isBioEvidenceMode() && process.env.CRAFT_DEBUG_SSE_RAW === '1';
 
 // ============================================================================
 // PROXY CONFIGURATION (from env vars injected by parent process)
@@ -1949,6 +1950,7 @@ function headersToCurl(headers: HeadersInitType | undefined): string {
  * Format a fetch request as a cURL command
  */
 function toCurl(url: string, init?: RequestInit): string {
+  if (isBioEvidenceMode()) return '[BioEvidence request details omitted]';
   const method = init?.method?.toUpperCase() ?? 'GET';
   const headers = headersToCurl(init?.headers as HeadersInitType | undefined);
 

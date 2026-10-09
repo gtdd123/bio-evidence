@@ -58,6 +58,7 @@ export function enableDebug(): void {
  * Check if debug mode is enabled.
  */
 export function isDebugEnabled(): boolean {
+  if (typeof process !== 'undefined' && process.env?.BIOEVIDENCE_MODE === '1') return false;
   if (isCliJsonOnlyMode()) return false;
   return debugEnabled;
 }

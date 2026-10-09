@@ -1,5 +1,6 @@
 import { query, createSdkMcpServer, tool, AbortError, type Query, type SDKMessage, type SDKUserMessage, type SDKAssistantMessageError, type Options } from '@anthropic-ai/claude-agent-sdk';
 import { getDefaultOptions, resetClaudeConfigCheck } from './options.ts';
+import { isBioEvidenceMode } from '../config/namespace.mjs';
 // Local type for SDK user message content blocks (text, image, document)
 // Replaces import from @anthropic-ai/sdk/resources — keeps SDK as agent-only dependency
 type ContentBlockParam =
@@ -2577,6 +2578,7 @@ This is a branched conversation. All prior messages in this conversation are par
    * SDK may still be writing to the debug file when the error event is received.
    */
   private async parseApiErrorFromDebugLog(): Promise<ClaudeSdkApiError | null> {
+    if (isBioEvidenceMode()) return null;
     if (!this.sessionId) return null;
 
     const fs = require('fs');

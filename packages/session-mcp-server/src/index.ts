@@ -21,6 +21,8 @@
  *   --plans-folder: Path to session's plans folder
  */
 
+import '../../../scripts/bio-runtime-guard.mjs';
+import { resolveConfigDir } from '../../shared/src/config/namespace.mjs';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -242,7 +244,7 @@ function createCodexContext(config: SessionConfig): SessionToolContext {
 
     // Developer feedback: write one JSON file per entry to {configDir}/feedback/
     submitFeedback: (feedback) => {
-      const configDir = process.env.CRAFT_CONFIG_DIR || join(workspaceRootPath, '..', '..');
+      const configDir = resolveConfigDir();
       const feedbackDir = join(configDir, 'feedback');
       mkdirSync(feedbackDir, { recursive: true });
       const filePath = join(feedbackDir, `${feedback.id}.json`);

@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { buildNamespaceEnv, getSdkPaths } from '../packages/shared/src/config/namespace.mjs';
 
 export const PINNED_BUN_VERSION = '1.3.10';
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -64,7 +65,7 @@ export function createLaunchSpec({ projectRoot, executable, purpose, args, baseE
   if (!isAbsolute(executable)) throw new Error('Pinned executable must be absolute');
   assertInside(join(root, '.tools'), executable, 'Bun executable');
   const stateRoot = join(root, '.runtime', purpose);
-  const env = {};
+  let env = {};
   for (const key of OS_ENV_KEYS) {
     if (typeof baseEnv[key] === 'string') env[key] = baseEnv[key];
   }
@@ -76,6 +77,7 @@ export function createLaunchSpec({ projectRoot, executable, purpose, args, baseE
   env.CRAFT_APP_NAME = 'BioEvidence';
   env.CRAFT_DEEPLINK_SCHEME = 'bioevidence';
   env.CRAFT_DEBUG = '0';
+  env = buildNamespaceEnv(env);
   env.NODE_ENV = purpose === 'build' ? 'production' : purpose === 'test' ? 'test' : 'development';
   env.BUN_INSTALL_CACHE_DIR = join(root, '.runtime', 'cache', 'bun-install');
   env.BUN_TMPDIR = join(root, '.runtime', 'tmp');
@@ -92,6 +94,11 @@ export function launch({ purpose, args, projectRoot = PROJECT_ROOT }) {
   rejectAutoEnvFiles(projectRoot);
   const executable = readPinnedRuntime(projectRoot);
   const spec = createLaunchSpec({ projectRoot, executable, purpose, args });
+  const sdk = getSdkPaths(spec.env);
+  for (const directory of [spec.stateRoot, spec.env.BUN_INSTALL_CACHE_DIR, spec.env.BUN_TMPDIR, spec.env.TEMP, sdk.home, sdk.claude, sdk.pi, sdk.xdg, spec.env.XDG_CONFIG_HOME, spec.env.XDG_DATA_HOME, spec.env.XDG_CACHE_HOME, spec.env.XDG_STATE_HOME, spec.env.APPDATA, spec.env.LOCALAPPDATA]) {
+    assertInside(join(projectRoot, '.runtime'), directory, 'Owned runtime directory');
+    mkdirSync(directory, { recursive: true });
+  }
   // Version-only probe runs outside the repository and does not execute an
   // application, package lifecycle, or SDK.
   const version = spawnSync(executable, ['--version'], {
@@ -99,9 +106,6 @@ export function launch({ purpose, args, projectRoot = PROJECT_ROOT }) {
   });
   if (version.status !== 0 || version.stdout.trim() !== PINNED_BUN_VERSION) {
     throw new Error('Pinned Bun version check failed');
-  }
-  for (const directory of [spec.stateRoot, spec.env.BUN_INSTALL_CACHE_DIR, spec.env.BUN_TMPDIR]) {
-    mkdirSync(directory, { recursive: true });
   }
   const child = spawnSync(spec.executable, spec.args, {
     cwd: spec.cwd, env: spec.env, stdio: 'inherit', windowsHide: true,

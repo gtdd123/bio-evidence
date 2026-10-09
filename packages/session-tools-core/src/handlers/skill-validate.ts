@@ -9,7 +9,7 @@
  * If resolution fails, project-tier skills are silently skipped with a warning.
  */
 
-import { homedir } from 'node:os';
+import { getGlobalSkillsDir } from '../../../shared/src/config/namespace.mjs';
 import { join } from 'node:path';
 import type { SessionToolContext } from '../context.ts';
 import type { ToolResult } from '../types.ts';
@@ -49,7 +49,7 @@ function resolveSkillMdPath(
   }
 
   // 3. Global-level (lowest priority): ~/.agents/skills/{slug}/SKILL.md
-  const globalPath = join(homedir(), '.agents', 'skills', slug, 'SKILL.md');
+  const globalPath = join(getGlobalSkillsDir(), slug, 'SKILL.md');
   if (ctx.fs.exists(globalPath)) {
     return { path: globalPath, tier: 'global' };
   }
@@ -91,7 +91,7 @@ export async function handleSkillValidate(
     const searchedPaths = [
       workingDirectory ? `  - ${join(workingDirectory, '.agents', 'skills', skillSlug, 'SKILL.md')} (project)` : null,
       `  - ${join(ctx.workspacePath, 'skills', skillSlug, 'SKILL.md')} (workspace)`,
-      `  - ${join(homedir(), '.agents', 'skills', skillSlug, 'SKILL.md')} (global)`,
+      `  - ${join(getGlobalSkillsDir(), skillSlug, 'SKILL.md')} (global)`,
     ].filter(Boolean).join('\n');
 
     const warning = !workingDirectory

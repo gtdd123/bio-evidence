@@ -6,7 +6,7 @@
  */
 
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { resolveConfigDir } from '../../../shared/src/config/namespace.mjs';
 
 const AUTOMATIONS_CONFIG_FILE = 'automations.json';
 import type { SessionToolContext } from '../context.ts';
@@ -35,7 +35,7 @@ export async function handleConfigValidate(
   args: ConfigValidateArgs
 ): Promise<ToolResult> {
   const { target, sourceSlug } = args;
-  const craftAgentRoot = join(homedir(), '.craft-agent');
+  const craftAgentRoot = resolveConfigDir();
 
   // If full validators available (Claude), use them
   if (ctx.validators) {

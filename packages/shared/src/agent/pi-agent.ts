@@ -14,6 +14,7 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
+import { buildNamespaceEnv } from '../config/namespace.mjs';
 import { createInterface, type Interface as ReadlineInterface } from 'node:readline';
 import type { AgentEvent } from '@craft-agent/core/types';
 import type { FileAttachment } from '../utils/files.ts';
@@ -423,6 +424,8 @@ export class PiAgent extends BaseAgent {
    * Spawn the pi-agent-server subprocess and set up JSONL communication.
    */
   private async spawnSubprocess(): Promise<void> {
+    // Validate before credentials, subprocess promises or SDK initialization.
+    buildNamespaceEnv(process.env, this.config.envOverrides);
     const runtime = getBackendRuntime(this.config);
     const piServerPath = runtime.paths?.piServer;
     if (!piServerPath) {
@@ -486,7 +489,7 @@ export class PiAgent extends BaseAgent {
     const child = spawn(nodePath, args, {
       cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: {
+      env: buildNamespaceEnv(process.env, {
         ...process.env,
         ...getProxyEnvVars(),
         ...this.config.envOverrides,
@@ -495,7 +498,7 @@ export class PiAgent extends BaseAgent {
         ...(sessionDir ? { CRAFT_SESSION_DIR: sessionDir } : {}),
         // Propagate debug mode
         CRAFT_DEBUG: (process.argv.includes('--debug') || process.env.CRAFT_DEBUG === '1') ? '1' : '0',
-      },
+      }),
     });
 
     this.subprocess = child;

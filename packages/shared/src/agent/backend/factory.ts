@@ -24,6 +24,7 @@ import type {
   BackendHostRuntimeContext,
 } from './types.ts';
 import { ClaudeAgent } from '../claude-agent.ts';
+import { isBioEvidenceMode, resolveConfigDir } from '../../config/namespace.mjs';
 import { PiAgent } from '../pi-agent.ts';
 import {
   getLlmConnection,
@@ -42,6 +43,7 @@ import type { ModelFetchResult } from '../../config/model-fetcher.ts';
 import { getModelProvider, DEFAULT_MODEL, normalizeDeprecatedModelId } from '../../config/models.ts';
 import { homedir } from 'node:os';
 import { rm } from 'node:fs/promises';
+import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { getCredentialManager } from '../../credentials/index.ts';
 import type {
@@ -750,7 +752,8 @@ export async function testBackendConnection(args: {
       if (driverResult !== null) return driverResult;
     }
 
-    const cwd = homedir();
+    const cwd = isBioEvidenceMode() ? join(resolveConfigDir(), 'sdk', 'connection-tests') : homedir();
+    if (isBioEvidenceMode()) mkdirSync(cwd, { recursive: true });
     const agent = createBackendFromResolvedContext({
       context,
       coreConfig: {

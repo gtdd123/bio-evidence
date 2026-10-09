@@ -10,8 +10,11 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, renameSync, unlinkSync, appendFileSync, mkdirSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { isBioEvidenceMode, resolveConfigDir, validateNamespacePath } from './config/namespace.mjs';
+
+const CONFIG_DIR = resolveConfigDir();
+const BIO_MODE = isBioEvidenceMode();
 
 // ============================================================================
 // CONSTANTS
@@ -21,27 +24,27 @@ import { join } from 'node:path';
 export const IS_PACKAGED = process.argv.some(arg => arg.includes('app.asar'));
 
 /** Enable interceptor logging in dev mode (not packaged), disable in production */
-export const INTERCEPTOR_LOGGING_ENABLED = !IS_PACKAGED;
+export const INTERCEPTOR_LOGGING_ENABLED = !BIO_MODE && !IS_PACKAGED;
 
 export const DEBUG = INTERCEPTOR_LOGGING_ENABLED &&
   (process.argv.includes('--debug') || process.env.CRAFT_DEBUG === '1');
 
 /** Config file path for reading settings in the SDK subprocess */
-export const CONFIG_FILE = join(homedir(), '.craft-agent', 'config.json');
+export const CONFIG_FILE = join(CONFIG_DIR, 'config.json');
 
 /** Session directory — set by env var (subprocess) or setSessionDir() (main process) */
-let _sessionDir: string | null = process.env.CRAFT_SESSION_DIR || null;
+let _sessionDir: string | null = process.env.CRAFT_SESSION_DIR ? validateNamespacePath(process.env.CRAFT_SESSION_DIR) : null;
 
 // ============================================================================
 // LOGGING
 // ============================================================================
 
-export const LOG_DIR = join(homedir(), '.craft-agent', 'logs');
+export const LOG_DIR = join(CONFIG_DIR, 'logs');
 export const LOG_FILE = join(LOG_DIR, 'interceptor.log');
 
 // Ensure log directory exists at module load
 try {
-  if (!existsSync(LOG_DIR)) {
+  if (INTERCEPTOR_LOGGING_ENABLED && !existsSync(LOG_DIR)) {
     mkdirSync(LOG_DIR, { recursive: true });
   }
 } catch {
@@ -51,7 +54,7 @@ try {
 // Rotate log file if older than 1 day
 const MAX_LOG_AGE_MS = 24 * 60 * 60 * 1000;
 try {
-  if (existsSync(LOG_FILE)) {
+  if (INTERCEPTOR_LOGGING_ENABLED && existsSync(LOG_FILE)) {
     const stat = statSync(LOG_FILE);
     if (Date.now() - stat.mtimeMs > MAX_LOG_AGE_MS) {
       const prevLog = LOG_FILE + '.prev';
@@ -171,11 +174,11 @@ function getErrorFilePath(): string {
   // Prefer session-scoped file to avoid cross-session error consumption.
   if (_sessionDir) return join(_sessionDir, 'api-error.json');
   // Fallback for legacy/non-session contexts.
-  return join(homedir(), '.craft-agent', 'api-error.json');
+  return join(CONFIG_DIR, 'api-error.json');
 }
 
 function getStoredError(sessionDir?: string): LastApiError | null {
-  const errorFile = sessionDir ? join(sessionDir, 'api-error.json') : getErrorFilePath();
+  const errorFile = sessionDir ? join(validateNamespacePath(sessionDir), 'api-error.json') : getErrorFilePath();
   try {
     if (!existsSync(errorFile)) return null;
     const content = readFileSync(errorFile, 'utf-8');
@@ -196,7 +199,8 @@ export function setStoredError(error: LastApiError | null): void {
   const errorFile = getErrorFilePath();
   try {
     if (error) {
-      writeFileSync(errorFile, JSON.stringify(error));
+      const stored = BIO_MODE ? { status: error.status, statusText: 'API error', message: `API request failed (HTTP ${Number.isInteger(error.status) ? error.status : 0})`, timestamp: error.timestamp } : error;
+      writeFileSync(errorFile, JSON.stringify(stored));
       debugLog(`[setStoredError] Wrote error to file: ${error.status} ${error.message}`);
     } else {
       try {
@@ -271,6 +275,7 @@ function getMetadataFilePath(): string | null {
 
 /** Read metadata from a specific session directory's file */
 function readMetadataFileFromDir(dir: string): Record<string, ToolMetadata> {
+  validateNamespacePath(dir);
   try {
     const filePath = join(dir, 'tool-metadata.json');
     const data = readFileSync(filePath, 'utf-8');
@@ -333,7 +338,7 @@ export const toolMetadataStore = {
    * tool_use_ids are globally unique UUIDs and won't conflict.
    */
   setSessionDir(dir: string): void {
-    _sessionDir = dir;
+    _sessionDir = validateNamespacePath(dir);
     // Merge, don't clear — concurrent sessions share this singleton and
     // clearing would discard metadata from other active sessions.
     const all = readMetadataFile();

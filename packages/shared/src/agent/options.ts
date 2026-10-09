@@ -1,7 +1,8 @@
 import type { Options } from "@anthropic-ai/claude-agent-sdk";
 import { join } from "path";
 import { homedir } from "os";
-import { existsSync, readFileSync, writeFileSync, unlinkSync, readdirSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, unlinkSync, readdirSync, mkdirSync } from "fs";
+import { buildNamespaceEnv, getSdkHomeDir, getSdkPaths, isBioEvidenceMode, resolveConfigDir } from '../config/namespace.mjs';
 import { debug } from "../utils/debug";
 import { getProxyEnvVars } from "../config/proxy-env.ts";
 import { getGitBashPath } from "../config/storage.ts";
@@ -35,10 +36,15 @@ const UTF8_BOM = '\uFEFF';
  * resetClaudeConfigCheck() is called to force a re-check after error recovery.
  */
 function ensureClaudeConfig(): void {
+    const homeDir = getSdkHomeDir(); // Fail closed before repair or directory scans.
     if (claudeConfigChecked) return;
     claudeConfigChecked = true;
 
-    const configPath = join(homedir(), '.claude.json');
+    if (isBioEvidenceMode()) {
+        mkdirSync(homeDir, { recursive: true });
+        mkdirSync(getSdkPaths().claude, { recursive: true });
+    }
+    const configPath = join(homeDir, '.claude.json');
 
     // Clean up stale .backup file — if present and .claude.json is missing,
     // the Claude Code executable writes "A backup file exists at..." to stdout, crashing the SDK.
@@ -56,7 +62,6 @@ function ensureClaudeConfig(): void {
     // Clean up .corrupted.* files — these accumulate on Windows and signal
     // to Claude Code that a previous corruption was detected, altering its stdout output.
     try {
-        const homeDir = homedir();
         const files = readdirSync(homeDir);
         for (const file of files) {
             if (file.startsWith('.claude.json.corrupted.')) {
@@ -186,13 +191,13 @@ export function getPathToClaudeCodeExecutable(): string | undefined {
 export function buildClaudeSubprocessEnv(
     envOverrides?: Record<string, string>,
 ): NodeJS.ProcessEnv {
-    const env: NodeJS.ProcessEnv = {
+    const env: NodeJS.ProcessEnv = buildNamespaceEnv(process.env, {
         ...process.env,
         ...getProxyEnvVars(),
         ...envOverrides,
         // Propagate debug mode from argv flag OR existing env var
         CRAFT_DEBUG: (process.argv.includes('--debug') || process.env.CRAFT_DEBUG === '1') ? '1' : '0',
-    };
+    });
 
     // Windows: point the SDK's Bash tool at the user-configured Git Bash if set.
     // The SDK otherwise falls back to a hardcoded Program Files search that misses
@@ -219,10 +224,9 @@ function nativeBinaryName(): string {
 }
 
 export function getDefaultOptions(envOverrides?: Record<string, string>): Partial<Options> {
-    // Repair corrupted ~/.claude.json before the SDK subprocess reads it
-    ensureClaudeConfig();
-
     const env = buildClaudeSubprocessEnv(envOverrides);
+    // Validate environment before any repair reads, scans, deletes or writes.
+    ensureClaudeConfig();
 
     // If custom path is set (e.g., for Electron packaged build), point the SDK at it.
     // This is the native `claude` binary, not a JS file.
@@ -236,7 +240,7 @@ export function getDefaultOptions(envOverrides?: Record<string, string>): Partia
     // Standalone CLI distribution (`scripts/install.sh`) lays the per-version
     // SDK out at ~/.local/share/craft/versions/<version>/claude-agent-sdk/<binary>
     if (typeof CRAFT_AGENT_CLI_VERSION !== 'undefined' && CRAFT_AGENT_CLI_VERSION != null) {
-        const baseDir = join(homedir(), '.local', 'share', 'craft', 'versions', CRAFT_AGENT_CLI_VERSION);
+        const baseDir = isBioEvidenceMode() ? join(resolveConfigDir(), 'versions', CRAFT_AGENT_CLI_VERSION) : join(homedir(), '.local', 'share', 'craft', 'versions', CRAFT_AGENT_CLI_VERSION);
         return {
             pathToClaudeCodeExecutable: join(baseDir, 'claude-agent-sdk', nativeBinaryName()),
             env,

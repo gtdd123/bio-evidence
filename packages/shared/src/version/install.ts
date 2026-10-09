@@ -4,6 +4,7 @@ import { promisify } from "util";
 import { getLatestVersion, getManifest } from "./manifest";
 import { createHash } from "crypto";
 import { homedir } from "os";
+import { isBioEvidenceMode, resolveConfigDir } from '../config/namespace.mjs';
 import { join } from "path";
 import * as tar from "tar";
 import { debug } from "../utils/debug";
@@ -47,9 +48,9 @@ async function extractArchive(params: { archiveData: ArrayBuffer, destination: s
 
 export async function installArchive(params: { archiveData: ArrayBuffer, version: string }): Promise<void> {
   const { archiveData, version } = params;
-  const versionDirectory = join(homedir(), '.local', 'share', 'craft', 'versions', version);
+  const versionDirectory = isBioEvidenceMode() ? join(resolveConfigDir(), 'versions', version) : join(homedir(), '.local', 'share', 'craft', 'versions', version);
   const binaryPath = join(versionDirectory, 'craft');
-  const symlinkDirectory = join(homedir(), '.local', 'bin');
+  const symlinkDirectory = isBioEvidenceMode() ? join(resolveConfigDir(), 'bin') : join(homedir(), '.local', 'bin');
   const symlinkPath = join(symlinkDirectory, 'craft');
 
   await ensureDirectory(versionDirectory);

@@ -12,7 +12,7 @@
  */
 
 import { existsSync, readFileSync, mkdirSync, writeFileSync } from 'fs';
-import { homedir } from 'os';
+import { resolveConfigDir } from '../config/namespace.mjs';
 import { join } from 'path';
 import { debug } from '../utils/debug.ts';
 import { readJsonFileSync, safeJsonParse } from '../utils/files.ts';
@@ -46,7 +46,7 @@ let permissionsInitialized = false;
  * Reads env var dynamically so tests can override via CRAFT_CONFIG_DIR.
  */
 export function getAppPermissionsDir(): string {
-  const configDir = process.env.CRAFT_CONFIG_DIR || join(homedir(), '.craft-agent');
+  const configDir = resolveConfigDir();
   return join(configDir, 'permissions');
 }
 

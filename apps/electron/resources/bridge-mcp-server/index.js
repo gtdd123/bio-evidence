@@ -1,4 +1,9 @@
 #!/usr/bin/env node
+// BioEvidence: no matching source for this legacy generated bundle was supplied.
+// Claude/Pi do not use it. Refuse before cache/credential IO or server startup.
+if (process.env.BIOEVIDENCE_MODE === "1") {
+  throw new Error("Legacy bridge bundle is disabled in BioEvidence");
+}
 var __create = Object.create;
 var __getProtoOf = Object.getPrototypeOf;
 var __defProp = Object.defineProperty;

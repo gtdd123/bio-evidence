@@ -14,6 +14,8 @@
  * separate process, avoiding bundling issues in the Electron main process.
  */
 
+import '../../../scripts/bio-runtime-guard.mjs';
+import { getSdkPaths, isBioEvidenceMode, validateNamespacePath } from '../../shared/src/config/namespace.mjs';
 import http from 'node:http';
 import { createInterface } from 'node:readline';
 import { join } from 'node:path';
@@ -287,6 +289,7 @@ function send(msg: OutboundMessage): void {
 }
 
 function debugLog(message: string): void {
+  if (isBioEvidenceMode()) return;
   // Write debug messages to stderr so they don't interfere with JSONL protocol
   process.stderr.write(`[pi-server] ${message}\n`);
 }
@@ -578,12 +581,13 @@ async function ensureSession(): Promise<AgentSession> {
     modelRegistry,
     customTools: wrappedAll,
     tools: toolAllowlist,
+    ...(isBioEvidenceMode() ? { agentDir: getSdkPaths().pi } : {}),
   };
 
   // Extension isolation: set agentDir to a temp directory under session path
   // to prevent loading global Pi extensions from ~/.pi/agent
   if (initConfig.sessionPath) {
-    const agentDir = initConfig.agentDir || join(initConfig.sessionPath, '.pi-agent');
+    const agentDir = validateNamespacePath(initConfig.agentDir || join(initConfig.sessionPath, '.pi-agent'));
     mkdirSync(agentDir, { recursive: true });
     sessionOptions.agentDir = agentDir;
 
@@ -591,13 +595,13 @@ async function ensureSession(): Promise<AgentSession> {
     // persist and resume its own session across subprocess restarts.
     // continueRecent() loads the existing session if one exists, otherwise
     // creates a new one — so this handles both first-run and resume.
-    const sessionDir = join(initConfig.sessionPath, '.pi-sessions');
+    const sessionDir = join(validateNamespacePath(initConfig.sessionPath), '.pi-sessions');
     mkdirSync(sessionDir, { recursive: true });
 
     if (initConfig.branchFromSessionPath) {
       // Branching: fork from the parent session's Pi session file.
       // Branches must not silently degrade to fresh sessions.
-      const parentPiSessionDir = join(initConfig.branchFromSessionPath, '.pi-sessions');
+      const parentPiSessionDir = join(validateNamespacePath(initConfig.branchFromSessionPath), '.pi-sessions');
       const parentPiSessionFile = findMostRecentSessionFile(parentPiSessionDir);
       if (!parentPiSessionFile) {
         throw new Error(`Pi branch preflight failed: no parent Pi session file found in ${parentPiSessionDir}`);
@@ -945,6 +949,7 @@ async function queryLlm(request: LLMQueryRequest): Promise<LLMQueryResult> {
       tools: [],
       sessionManager: PiSessionManager.inMemory(),
       model: piModel,
+      ...(isBioEvidenceMode() ? { agentDir: getSdkPaths().pi } : {}),
     };
 
     const { session: ephemeralSession } = await createAgentSession(ephemeralOptions);
