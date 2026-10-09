@@ -72,3 +72,29 @@ credentials.enc
 # act (local GitHub Actions runner)
 .secrets
 .actrc
+
+# BioEvidence project-only tools and runtime data (T00)
+/.tools/
+/.runtime/
+/.bio-evidence/
+/runtime/
+/private-data/
+/exports/
+
+# Local service environment; public template remains distributable
+.env.*
+!.env.example
+
+# SQLite databases, transaction journals, and runtime logs
+*.sqlite
+*.sqlite3
+*.sqlite-*
+*.sqlite3-*
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.log
+
+# Runtime JSONL histories belong under the ignored runtime roots above.
+# Synthetic, reviewed source fixtures are not globally ignored.

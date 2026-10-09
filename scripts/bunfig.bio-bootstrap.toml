@@ -1,0 +1,6 @@
+# Explicit bootstrap configuration: no preload is declared. Bun 1.3.10
+# rejects empty preload arrays, so the original config must be replaced.
+
+[install]
+linker = "hoisted"
+registry = "https://registry.npmjs.org"
