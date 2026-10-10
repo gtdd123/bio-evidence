@@ -1,3 +1,4 @@
+import { buildNamespaceEnv } from '@craft-agent/shared/config/namespace';
 /**
  * Integration test for the main-process i18n bootstrap.
  *
@@ -28,7 +29,7 @@ interface RunResult {
 
 function runScript(configDir: string, script: string): RunResult {
   const result = Bun.spawnSync([process.execPath, '--eval', script], {
-    env: { ...process.env, CRAFT_CONFIG_DIR: configDir },
+    env: buildNamespaceEnv({ ...process.env, CRAFT_CONFIG_DIR: configDir, BIOEVIDENCE_CONFIG_DIR: configDir, CRAFT_SESSION_DIR: undefined }),
     stdout: 'pipe',
     stderr: 'pipe',
   })

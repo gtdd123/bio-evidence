@@ -1,6 +1,6 @@
 # T01 — 安装前 namespace 隔离证据
 
-日期：2026-10-09（Asia/Shanghai）。任务：仅 T01，依据已审批 Plan/Tasks 与 T00。起点 HEAD：`a1254cc1a2d8787ae70c60d1df6662eea244019e`。状态：实现与安装前验证完成，待独立 judge 审批；未安装依赖、未执行实际 SDK、未启动应用、未提交 Git。
+日期：2026-10-09（Asia/Shanghai）。任务：仅 T01，依据已审批 Plan/Tasks 与 T00。起点 HEAD：`a1254cc1a2d8787ae70c60d1df6662eea244019e`。状态：独立 judge 已审批 PASS，已提交 `889e47e335cc0bc22ea8bfb1bc0a6c1020515148`。以下验证与未验证项记录 T01 阶段完成时的状态；后续进展以 Tasks 和对应证据为准。
 
 ## 边界
 
@@ -100,10 +100,6 @@ T01 只满足安装前门槛。安装后必须在同一个固定 runtime/launche
 
 只有安装后安全回归与合成秘密构建 Red→Green 都通过，才执行普通 typecheck/test/build 或应用入口。当前未验证：完整 TypeScript 类型、所有原回归、SDK 真正启动、Electron app、真实网络/模型、T02 构建秘密闭包。缺口不标成 PASS，也不在 T01 偷跑 SDK。旧 bridge 在 Bio 模式继续禁用，不能在 T02 自动解禁。
 
-## 独立审批
-
-2026-10-09 `/root/independent_judge` 针对 Windows 混合大小写 hook 复审，独立复跑得到 25 pass/0 fail/exit0，diff check 通过且父环境未变，给出 **PASS，授权提交 T01 并开始 T02**。本结论仅安装前隔离，T02 的实际 SDK、类型和构建门槛保持有效。
-
 ## 独立 judge REVISE 后的大小写修正
 
 独立 judge 指出 `buildNamespaceEnv` 只删除大写 hook key；Windows 将保留的 `Node_Options` 当作 `NODE_OPTIONS` 解析，合成 probe 可以进入子进程。原始 23 项 PASS 不足以覆盖这条平台行为，以上记录保持为首次交审的事实。
@@ -128,4 +124,8 @@ node --experimental-vm-modules --test scripts/__tests__/bio-isolation.test.mjs s
 git diff --check
 ```
 
-完整回归 **25 pass / 0 fail / exit 0**（已授权扩展执行 neutral Bun，仍无 SDK/app/import/install）；diff 检查 **exit 0**。本轮仅修改 namespace.mjs、bio-launch.test.mjs 与本证据文档；没有增加依赖或推进 T02。状态：修正完成，待 judge 复审。
+完整回归 **25 pass / 0 fail / exit 0**（已授权扩展执行 neutral Bun，仍无 SDK/app/import/install）；diff 检查 **exit 0**。本轮仅修改 namespace.mjs、bio-launch.test.mjs 与本证据文档；没有增加依赖或推进 T02。此处是复审前的验证记录；最终结论见下方独立审批。
+
+## 独立审批
+
+2026-10-09 `/root/independent_judge` 针对 Windows 混合大小写 hook 复审，独立复跑得到 25 pass/0 fail/exit0，diff check 通过且父环境未变，给出 **PASS，授权提交 T01 并开始 T02**。本结论仅安装前隔离，T02 的实际 SDK、类型和构建门槛保持有效。

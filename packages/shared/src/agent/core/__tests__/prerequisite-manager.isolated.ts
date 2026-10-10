@@ -6,9 +6,11 @@
  */
 import { describe, it, expect, beforeEach, mock } from 'bun:test';
 import { existsSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { CONFIG_DIR } from '../../../config/paths.ts';
 import { resolve, join } from 'node:path';
 import { PrerequisiteManager } from '../prerequisite-manager.ts';
+
+mock.module('../../../config/storage.ts', () => ({ getBrowserToolEnabled: () => true }));
 
 // Mock existsSync to control guide.md existence
 const originalExistsSync = existsSync;
@@ -27,7 +29,7 @@ function guidePath(slug: string): string {
 }
 
 function browserDocPath(): string {
-  return resolve(join(homedir(), '.craft-agent', 'docs', 'browser-tools.md'));
+  return resolve(join(CONFIG_DIR, 'docs', 'browser-tools.md'));
 }
 
 describe('PrerequisiteManager', () => {
@@ -98,7 +100,7 @@ describe('PrerequisiteManager', () => {
       const docsPath = browserDocPath();
       mockExistsPaths.add(docsPath);
 
-      const result = manager.checkPrerequisites('browser_snapshot');
+      const result = manager.checkPrerequisites('browser_tool');
       expect(result.allowed).toBe(false);
       expect(result.blockReason).toContain(docsPath);
     });
@@ -298,11 +300,11 @@ describe('PrerequisiteManager', () => {
       const docsPath = browserDocPath();
       mockExistsPaths.add(docsPath);
 
-      expect(manager.checkPrerequisites('browser_open').allowed).toBe(false);
-      expect(manager.checkPrerequisites('browser_open').allowed).toBe(false);
+      expect(manager.checkPrerequisites('browser_tool').allowed).toBe(false);
+      expect(manager.checkPrerequisites('browser_tool').allowed).toBe(false);
 
       manager.trackReadTool({ file_path: docsPath });
-      expect(manager.checkPrerequisites('browser_open').allowed).toBe(true);
+      expect(manager.checkPrerequisites('browser_tool').allowed).toBe(true);
     });
   });
 
@@ -312,7 +314,7 @@ describe('PrerequisiteManager', () => {
 
   describe('trackBashSkillRead', () => {
     it('clears skill prerequisite when Bash command contains the skill path', () => {
-      const skillPath = '/test/workspace/skills/my-skill/SKILL.md';
+      const skillPath = resolve('/test/workspace/skills/my-skill/SKILL.md');
       manager.registerSkillPrerequisites([skillPath]);
 
       // WebSearch should be blocked (skill prerequisite pending)
@@ -331,7 +333,7 @@ describe('PrerequisiteManager', () => {
     });
 
     it('returns false when Bash command does not contain a pending skill path', () => {
-      const skillPath = '/test/workspace/skills/my-skill/SKILL.md';
+      const skillPath = resolve('/test/workspace/skills/my-skill/SKILL.md');
       manager.registerSkillPrerequisites([skillPath]);
 
       const result = manager.trackBashSkillRead({ command: 'ls -la /some/other/path' });
@@ -350,8 +352,8 @@ describe('PrerequisiteManager', () => {
     });
 
     it('clears multiple skill prerequisites from a single command', () => {
-      const skill1 = '/test/workspace/skills/alpha/SKILL.md';
-      const skill2 = '/test/workspace/skills/beta/SKILL.md';
+      const skill1 = resolve('/test/workspace/skills/alpha/SKILL.md');
+      const skill2 = resolve('/test/workspace/skills/beta/SKILL.md');
       manager.registerSkillPrerequisites([skill1, skill2]);
 
       // Command that contains both paths
@@ -365,7 +367,7 @@ describe('PrerequisiteManager', () => {
     });
 
     it('logs debug message when clearing via Bash', () => {
-      const skillPath = '/test/workspace/skills/my-skill/SKILL.md';
+      const skillPath = resolve('/test/workspace/skills/my-skill/SKILL.md');
       manager.registerSkillPrerequisites([skillPath]);
 
       manager.trackBashSkillRead({ command: `cat ${skillPath}` });

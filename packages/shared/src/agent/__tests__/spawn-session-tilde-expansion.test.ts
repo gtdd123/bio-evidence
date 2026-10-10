@@ -64,8 +64,9 @@ describe('preExecuteSpawnSession workingDirectory normalization', () => {
   });
 
   it('leaves absolute paths unchanged (aside from normalization)', async () => {
-    await agent.invokeSpawn({ prompt: 'hi', workingDirectory: '/tmp/abs/path' });
-    expect(captured[0]?.workingDirectory).toBe('/tmp/abs/path');
+    const absolutePath = resolve(process.cwd(), 'synthetic-absolute', 'path');
+    await agent.invokeSpawn({ prompt: 'hi', workingDirectory: absolutePath });
+    expect(captured[0]?.workingDirectory).toBe(absolutePath);
   });
 
   it('resolves relative paths against cwd', async () => {

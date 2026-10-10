@@ -1,3 +1,4 @@
+import { buildNamespaceEnv } from '../namespace.mjs';
 import { describe, expect, it } from 'bun:test'
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
@@ -47,7 +48,7 @@ function setup(llmConnections: any[]) {
       '--eval',
       `import { updateLlmConnection } from '${STORAGE_MODULE_PATH}'; const ok = updateLlmConnection(${JSON.stringify(slug)}, ${updatesJson}); process.exit(ok ? 0 : 1);`,
     ], {
-      env: { ...process.env, CRAFT_CONFIG_DIR: configDir },
+      env: buildNamespaceEnv({ ...process.env, CRAFT_CONFIG_DIR: configDir, BIOEVIDENCE_CONFIG_DIR: configDir, CRAFT_SESSION_DIR: undefined }),
       stdout: 'pipe',
       stderr: 'pipe',
     })

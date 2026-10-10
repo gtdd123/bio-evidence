@@ -713,21 +713,7 @@ export async function uploadToS3(config: BuildConfig): Promise<void> {
  * Load environment variables from .env file
  */
 export async function loadEnvFile(config: BuildConfig): Promise<void> {
-  const envPath = join(config.rootDir, '.env');
-
-  if (existsSync(envPath)) {
-    const content = await Bun.file(envPath).text();
-    for (const line of content.split('\n')) {
-      const trimmed = line.trim();
-      if (trimmed && !trimmed.startsWith('#')) {
-        const [key, ...valueParts] = trimmed.split('=');
-        if (key && valueParts.length > 0) {
-          const value = valueParts.join('=').replace(/^["']|["']$/g, '');
-          process.env[key] = value;
-        }
-      }
-    }
-  }
+  throw new Error("Legacy dotenv loading is disabled; use explicit BioEvidence server configuration");
 }
 
 /**

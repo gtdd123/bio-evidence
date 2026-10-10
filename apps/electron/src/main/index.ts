@@ -10,22 +10,12 @@ import { createHash, randomUUID } from 'crypto'
 import { hostname, homedir } from 'os'
 import * as Sentry from '@sentry/electron/main'
 
-// Initialize Sentry error tracking as early as possible after app import.
-// Only enabled in production (packaged) builds to avoid noise during development.
-// DSN is baked in at build time via esbuild --define (same pattern as OAuth secrets).
-//
-// NOTE: Source map upload is intentionally disabled. Stack traces in Sentry will show
-// bundled/minified code. To enable source map upload in the future:
-//   1. Add SENTRY_AUTH_TOKEN, SENTRY_ORG, SENTRY_PROJECT to CI secrets
-//   2. Re-enable the @sentry/vite-plugin in vite.config.ts (handles renderer maps)
-//   3. Add @sentry/esbuild-plugin to scripts/electron-build-main.ts (handles main process maps)
+// BioEvidence disables external telemetry in main and renderer.
 Sentry.init({
-  dsn: process.env.SENTRY_ELECTRON_INGEST_URL,
+  dsn: undefined,
   environment: app.isPackaged ? 'production' : 'development',
   release: app.getVersion(),
-  // Enabled whenever the ingest URL is available — works in both production (baked via CI)
-  // and development (injected via .env / 1Password). Filter by environment in Sentry dashboard.
-  enabled: !!process.env.SENTRY_ELECTRON_INGEST_URL,
+  enabled: false,
 
   // Scrub sensitive data before sending to Sentry.
   // Removes authorization headers, API keys/tokens, and credential-like values.

@@ -65,11 +65,21 @@ describe('sandbox-env', () => {
     const env = createScriptRuntimeEnv({
       language: 'node',
       dataDir,
-    });
+    }, {});
 
     expect(env.TMPDIR).toBe(join(dataDir, '.tmp'));
     expect(env.UV_CACHE_DIR).toBeUndefined();
     expect(env.XDG_CACHE_HOME).toBeUndefined();
+    expect(env.PYTHONPYCACHEPREFIX).toBeUndefined();
+  });
+
+  it('preserves an existing owned XDG cache when creating a node runtime', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'sandbox-env-owned-xdg-'));
+    createdDirs.push(dataDir);
+    const ownedCache = join(dataDir, 'owned-cache');
+    const env = createScriptRuntimeEnv({ language: 'node', dataDir }, { XDG_CACHE_HOME: ownedCache });
+    expect(env.XDG_CACHE_HOME).toBe(ownedCache);
+    expect(env.UV_CACHE_DIR).toBeUndefined();
     expect(env.PYTHONPYCACHEPREFIX).toBeUndefined();
   });
 });

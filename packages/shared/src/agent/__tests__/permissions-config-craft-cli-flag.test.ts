@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { permissionsConfigCache } from '../permissions-config.ts'
 
 const originalConfigDir = process.env.CRAFT_CONFIG_DIR
+const originalBioConfigDir = process.env.BIOEVIDENCE_CONFIG_DIR
 const originalCliFlag = process.env.CRAFT_FEATURE_CRAFT_AGENTS_CLI
 
 function writeDefaultPermissions(configDir: string) {
@@ -39,6 +40,8 @@ afterEach(() => {
 
   if (originalConfigDir === undefined) delete process.env.CRAFT_CONFIG_DIR
   else process.env.CRAFT_CONFIG_DIR = originalConfigDir
+  if (originalBioConfigDir === undefined) delete process.env.BIOEVIDENCE_CONFIG_DIR
+  else process.env.BIOEVIDENCE_CONFIG_DIR = originalBioConfigDir
 
   if (originalCliFlag === undefined) delete process.env.CRAFT_FEATURE_CRAFT_AGENTS_CLI
   else process.env.CRAFT_FEATURE_CRAFT_AGENTS_CLI = originalCliFlag
@@ -49,6 +52,7 @@ describe('permissions config craft-agents-cli feature flag', () => {
     const tempConfigDir = mkdtempSync(join(tmpdir(), 'craft-permissions-'))
     try {
       process.env.CRAFT_CONFIG_DIR = tempConfigDir
+    process.env.BIOEVIDENCE_CONFIG_DIR = tempConfigDir
       process.env.CRAFT_FEATURE_CRAFT_AGENTS_CLI = '0'
       writeDefaultPermissions(tempConfigDir)
 
@@ -69,6 +73,7 @@ describe('permissions config craft-agents-cli feature flag', () => {
     const tempConfigDir = mkdtempSync(join(tmpdir(), 'craft-permissions-'))
     try {
       process.env.CRAFT_CONFIG_DIR = tempConfigDir
+    process.env.BIOEVIDENCE_CONFIG_DIR = tempConfigDir
       process.env.CRAFT_FEATURE_CRAFT_AGENTS_CLI = '1'
       writeDefaultPermissions(tempConfigDir)
 

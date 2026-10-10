@@ -4,6 +4,8 @@ import tailwindcss from '@tailwindcss/vite'
 import { resolve } from 'path'
 
 export default defineConfig({
+  envDir: false,
+  envPrefix: [],
   plugins: [
     react({
       babel: {

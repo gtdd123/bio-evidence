@@ -9,6 +9,8 @@ import { resolve } from 'path'
 // import { sentryVitePlugin } from '@sentry/vite-plugin'
 
 export default defineConfig({
+  envDir: false,
+  envPrefix: [],
   plugins: [
     react({
       babel: {

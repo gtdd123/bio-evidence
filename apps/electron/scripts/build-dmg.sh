@@ -1,4 +1,6 @@
 #!/bin/bash
+echo "Legacy packaging is disabled; use BioEvidence packaging commands" >&2
+exit 1
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

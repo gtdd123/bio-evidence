@@ -1,3 +1,4 @@
+import { buildNamespaceEnv } from '../namespace.mjs';
 import { describe, expect, it } from 'bun:test'
 import { mkdtempSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
@@ -16,7 +17,7 @@ function runEval(configDir: string, code: string): string {
     '--eval',
     `import { getSessionDraft, setSessionDraft, deleteSessionDraft, getAllSessionDrafts } from '${STORAGE_MODULE_PATH}'; ${code}`,
   ], {
-    env: { ...process.env, CRAFT_CONFIG_DIR: configDir },
+    env: buildNamespaceEnv({ ...process.env, CRAFT_CONFIG_DIR: configDir, BIOEVIDENCE_CONFIG_DIR: configDir, CRAFT_SESSION_DIR: undefined }),
     stdout: 'pipe',
     stderr: 'pipe',
   })

@@ -226,8 +226,16 @@ describe('CliRpcClient', () => {
     server = createErrorServer()
     const client = new CliRpcClient(server.url)
     await client.connect()
-    await expect(client.invoke('system:versions')).rejects.toThrow('test error')
-    client.destroy()
+    try {
+      // Bun 1.3.10's promise matcher can block this local WebSocket response.
+      // Await the operation directly and keep explicit error assertions.
+      let caught: unknown
+      try { await client.invoke('system:versions') } catch (error) { caught = error }
+      expect(caught).toBeInstanceOf(Error)
+      expect((caught as Error).message).toContain('test error')
+    } finally {
+      client.destroy()
+    }
   })
 
   it('invoke rejects on timeout', async () => {

@@ -6,6 +6,7 @@ import { resolveBackendContext } from '@craft-agent/shared/agent/backend'
 import { loadWorkspaceConfig } from '@craft-agent/shared/workspaces'
 import { SessionManager, createManagedSession } from './SessionManager.ts'
 import { buildRestartRequiredSignature } from './runtime-config.ts'
+import { loadStoredConfig, saveConfig } from '@craft-agent/shared/config/storage'
 
 // Regression coverage for the stale-Pi-subprocess bug where toggling
 // `supportsImages` on a custom-endpoint model wrote to disk but never reached
@@ -202,6 +203,18 @@ describe('refreshConnectionRuntime', () => {
     // pi_compat connection with explicit per-model `supportsImages`, the
     // helper must forward that field on `customModels` so the Pi subprocess
     // can re-register the model with `input: ['text', 'image']`.
+    const previousConfig = loadStoredConfig()
+    saveConfig({
+      workspaces: [], activeWorkspaceId: null, activeSessionId: null,
+      llmConnections: [{
+        slug: 'slug-A', name: 'Synthetic endpoint', providerType: 'pi_compat',
+        authType: 'none', baseUrl: 'http://127.0.0.1:1', createdAt: 1,
+        customEndpoint: { api: 'openai-completions' }, defaultModel: 'synthetic-vision',
+        models: [{ id: 'synthetic-vision', name: 'Synthetic vision', shortName: 'Vision',
+          description: 'Test fixture', provider: 'pi', contextWindow: 8192, supportsImages: true }],
+      }],
+    })
+    try {
     const agent = createAgentStub()
     injectSession(sm, 'shape-check', tmpRoot, 'slug-A', agent)
 
@@ -212,7 +225,7 @@ describe('refreshConnectionRuntime', () => {
     expect(payload).toBeDefined()
     expect(payload).toMatchObject({
       model: expect.any(String),
-      runtime: expect.any(Object),
+      runtime: { customModels: [{ id: 'synthetic-vision', contextWindow: 8192, supportsImages: true }] },
     })
     // The runtime envelope mirrors what `pi-agent.ts:requestRuntimeConfigUpdate`
     // unpacks — `customModels` shape preserves `supportsImages` when set.
@@ -225,6 +238,9 @@ describe('refreshConnectionRuntime', () => {
           }
         }
       }
+    }
+    } finally {
+      saveConfig(previousConfig ?? { workspaces: [], activeWorkspaceId: null, activeSessionId: null })
     }
   })
 })

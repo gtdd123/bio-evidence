@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'fs'
-import { join } from 'path'
+import { join, posix } from 'path'
 import { tmpdir } from 'os'
 import { serializeSession, validateBundle, MAX_BUNDLE_SIZE_BYTES } from '../bundle'
 import { writeSessionJsonl } from '../jsonl'
@@ -104,7 +104,7 @@ describe('serializeSession', () => {
 
     expect(bundle).not.toBeNull()
     expect(bundle!.files).toHaveLength(1)
-    expect(bundle!.files[0]!.relativePath).toBe(join('attachments', 'screenshot.png'))
+    expect(bundle!.files[0]!.relativePath).toBe(posix.join('attachments', 'screenshot.png'))
     expect(bundle!.files[0]!.size).toBe(13) // 'fake-png-data'.length
     // Verify base64 round-trips correctly
     const decoded = Buffer.from(bundle!.files[0]!.contentBase64, 'base64').toString()
@@ -127,7 +127,7 @@ describe('serializeSession', () => {
     expect(bundle).not.toBeNull()
     expect(bundle!.files).toHaveLength(2)
     const paths = bundle!.files.map(f => f.relativePath).sort()
-    expect(paths).toEqual([join('data', 'result.json'), join('plans', 'my-plan.md')])
+    expect(paths).toEqual([posix.join('data', 'result.json'), posix.join('plans', 'my-plan.md')])
   })
 
   it('preserves notes.md in bundle', () => {

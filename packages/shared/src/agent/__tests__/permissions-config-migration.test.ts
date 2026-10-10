@@ -2,14 +2,19 @@ import { describe, it, expect, afterEach } from 'bun:test';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { assertInside } from '../../../../../scripts/bio-launch.mjs';
+import { realpathSync } from 'node:fs';
 
 const originalCwd = process.cwd();
 const originalConfigDir = process.env.CRAFT_CONFIG_DIR;
+const originalBioConfigDir = process.env.BIOEVIDENCE_CONFIG_DIR
 
 afterEach(() => {
   process.chdir(originalCwd);
   if (originalConfigDir === undefined) delete process.env.CRAFT_CONFIG_DIR;
   else process.env.CRAFT_CONFIG_DIR = originalConfigDir;
+  if (originalBioConfigDir === undefined) delete process.env.BIOEVIDENCE_CONFIG_DIR
+  else process.env.BIOEVIDENCE_CONFIG_DIR = originalBioConfigDir
 });
 
 describe('ensureDefaultPermissions migration', () => {
@@ -56,6 +61,7 @@ describe('ensureDefaultPermissions migration', () => {
     );
 
     process.env.CRAFT_CONFIG_DIR = tempConfig;
+    process.env.BIOEVIDENCE_CONFIG_DIR = tempConfig
     process.chdir(tempRoot);
 
     const mod = await import(`../permissions-config.ts?case=${Date.now()}`);
@@ -81,6 +87,9 @@ describe('ensureDefaultPermissions migration', () => {
     expect(blockedCommandHints.some(h => h.command === 'printf')).toBe(true);
     expect(blockedCommandHints.some(h => h.command === 'sed')).toBe(true);
 
+    process.chdir(originalCwd);
+    assertInside(tmpdir(), tempRoot, "Permissions fixture cleanup");
+    assertInside(realpathSync(tmpdir()), realpathSync(tempRoot), "Permissions fixture cleanup");
     rmSync(tempRoot, { recursive: true, force: true });
     rmSync(tempConfig, { recursive: true, force: true });
   });

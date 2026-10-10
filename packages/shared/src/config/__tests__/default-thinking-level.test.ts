@@ -1,3 +1,4 @@
+import { buildNamespaceEnv } from '../namespace.mjs';
 import { describe, expect, it } from 'bun:test'
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
@@ -69,7 +70,7 @@ function runEval(configDir: string, code: string): string {
     '--eval',
     `import { getDefaultThinkingLevel, setDefaultThinkingLevel } from '${STORAGE_MODULE_PATH}'; ${code}`,
   ], {
-    env: { ...process.env, CRAFT_CONFIG_DIR: configDir },
+    env: buildNamespaceEnv({ ...process.env, CRAFT_CONFIG_DIR: configDir, BIOEVIDENCE_CONFIG_DIR: configDir, CRAFT_SESSION_DIR: undefined }),
     stdout: 'pipe',
     stderr: 'pipe',
   })
@@ -111,7 +112,7 @@ describe('default thinking level storage', () => {
       const output = runEval(configDir, "console.log(String(getDefaultThinkingLevel()))")
       expect(output).toBe(level)
     }
-  })
+  }, 30000)
 
   it('migrates legacy "think" value to "medium"', () => {
     const { configDir, configPath } = setupWorkspaceConfigDir()

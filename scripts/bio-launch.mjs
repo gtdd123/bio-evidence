@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -55,7 +56,7 @@ export function rejectAutoEnvFiles(projectRoot) {
   }
 }
 
-export function createLaunchSpec({ projectRoot, executable, purpose, args, baseEnv = process.env }) {
+export function createLaunchSpec({ projectRoot, executable, purpose, args, baseEnv = process.env, testInvocationId }) {
   const root = resolve(projectRoot);
   if (!PURPOSES.has(purpose)) throw new Error('Unknown launch purpose');
   if (!Array.isArray(args) || !COMMANDS.has(args[0])) throw new Error('Unsupported Bun command');
@@ -64,7 +65,11 @@ export function createLaunchSpec({ projectRoot, executable, purpose, args, baseE
   }
   if (!isAbsolute(executable)) throw new Error('Pinned executable must be absolute');
   assertInside(join(root, '.tools'), executable, 'Bun executable');
-  const stateRoot = join(root, '.runtime', purpose);
+  if (testInvocationId !== undefined && (purpose !== 'test' || !/^[a-zA-Z0-9-]{1,64}$/.test(testInvocationId))) {
+    throw new Error('Invalid test invocation namespace');
+  }
+  const stateRoot = testInvocationId === undefined
+    ? join(root, '.runtime', purpose) : join(root, '.runtime', purpose, testInvocationId);
   let env = {};
   for (const key of OS_ENV_KEYS) {
     if (typeof baseEnv[key] === 'string') env[key] = baseEnv[key];
@@ -79,6 +84,8 @@ export function createLaunchSpec({ projectRoot, executable, purpose, args, baseE
   env.CRAFT_DEBUG = '0';
   env = buildNamespaceEnv(env);
   env.NODE_ENV = purpose === 'build' ? 'production' : purpose === 'test' ? 'test' : 'development';
+  // Dependency preparation must not replace the project's reviewed Git hooks.
+  if (purpose === 'install') env.HUSKY = '0';
   env.BUN_INSTALL_CACHE_DIR = join(root, '.runtime', 'cache', 'bun-install');
   env.BUN_TMPDIR = join(root, '.runtime', 'tmp');
   const config = join(root, 'scripts', 'bunfig.bio-bootstrap.toml');
@@ -93,7 +100,9 @@ export function createLaunchSpec({ projectRoot, executable, purpose, args, baseE
 export function launch({ purpose, args, projectRoot = PROJECT_ROOT }) {
   rejectAutoEnvFiles(projectRoot);
   const executable = readPinnedRuntime(projectRoot);
-  const spec = createLaunchSpec({ projectRoot, executable, purpose, args });
+  const spec = createLaunchSpec({ projectRoot, executable, purpose, args,
+    ...(purpose === 'test' ? { testInvocationId: randomUUID() } : {}),
+  });
   const sdk = getSdkPaths(spec.env);
   for (const directory of [spec.stateRoot, spec.env.BUN_INSTALL_CACHE_DIR, spec.env.BUN_TMPDIR, spec.env.TEMP, sdk.home, sdk.claude, sdk.pi, sdk.xdg, spec.env.XDG_CONFIG_HOME, spec.env.XDG_DATA_HOME, spec.env.XDG_CACHE_HOME, spec.env.XDG_STATE_HOME, spec.env.APPDATA, spec.env.LOCALAPPDATA]) {
     assertInside(join(projectRoot, '.runtime'), directory, 'Owned runtime directory');

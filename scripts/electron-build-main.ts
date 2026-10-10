@@ -1,11 +1,12 @@
 /**
  * Cross-platform main process build script
- * Loads .env and passes OAuth defines to esbuild
+ * Uses an isolated environment and credential-free client defines.
  */
 
 import { spawn } from "bun";
-import { existsSync, readFileSync, statSync, mkdirSync } from "fs";
+import { existsSync, statSync, mkdirSync } from "fs";
 import { join } from "path";
+import { buildBunCommand, createBuildEnv, createClientDefines } from './bio-build.mjs';
 
 const ROOT_DIR = join(import.meta.dir, "..");
 const DIST_DIR = join(ROOT_DIR, "apps/electron/dist");
@@ -20,49 +21,11 @@ const PI_AGENT_SERVER_OUTPUT = join(PI_AGENT_SERVER_DIR, "dist/index.js");
 const WA_WORKER_DIR = join(ROOT_DIR, "packages/messaging-whatsapp-worker");
 const WA_WORKER_SOURCE = join(WA_WORKER_DIR, "src/worker.ts");
 const WA_WORKER_OUTPUT = join(WA_WORKER_DIR, "dist/worker.cjs");
+const BUILD_ENV = createBuildEnv();
 
-// Load .env file if it exists
-function loadEnvFile(): void {
-  const envPath = join(ROOT_DIR, ".env");
-  if (existsSync(envPath)) {
-    const content = readFileSync(envPath, "utf-8");
-    for (const line of content.split("\n")) {
-      const trimmed = line.trim();
-      if (trimmed && !trimmed.startsWith("#")) {
-        const eqIndex = trimmed.indexOf("=");
-        if (eqIndex > 0) {
-          const key = trimmed.slice(0, eqIndex).trim();
-          let value = trimmed.slice(eqIndex + 1).trim();
-          if ((value.startsWith('"') && value.endsWith('"')) ||
-              (value.startsWith("'") && value.endsWith("'"))) {
-            value = value.slice(1, -1);
-          }
-          process.env[key] = value;
-        }
-      }
-    }
-  }
-}
-
-// Get build-time defines for esbuild (OAuth, Sentry DSN, etc.)
-// NOTE: Sentry source map upload is intentionally disabled for the main process.
-// To enable in the future, add @sentry/esbuild-plugin. See apps/electron/CLAUDE.md.
-// NOTE: Google OAuth credentials are NOT baked into the build - users provide their own
-// via source config. See README_FOR_OSS.md for setup instructions.
+// Define only fixed, non-secret client constants.
 function getBuildDefines(): string[] {
-  const definedVars = [
-    "SLACK_OAUTH_CLIENT_ID",
-    "SLACK_OAUTH_CLIENT_SECRET",
-    "MICROSOFT_OAUTH_CLIENT_ID",
-    "MICROSOFT_OAUTH_CLIENT_SECRET",
-    "SENTRY_ELECTRON_INGEST_URL",
-    "CRAFT_DEV_RUNTIME",
-  ];
-
-  return definedVars.map((varName) => {
-    const value = process.env[varName] || "";
-    return `--define:process.env.${varName}="${value}"`;
-  });
+  return Object.entries(createClientDefines()).map(([key, value]) => `--define:${key}=${value}`);
 }
 
 // Wait for file to stabilize (no size changes)
@@ -107,6 +70,7 @@ async function verifyJsFile(filePath: string): Promise<{ valid: boolean; error?:
 
   const proc = spawn({
     cmd: ["node", "--check", filePath],
+    env: BUILD_ENV,
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -141,15 +105,15 @@ async function buildInterceptor(): Promise<void> {
   console.log("🔌 Building unified network interceptor...");
 
   const proc = spawn({
-    cmd: [
-      "bun", "run", "esbuild",
+    cmd: buildBunCommand([ "run", "esbuild",
       INTERCEPTOR_SOURCE,
       "--bundle",
       "--platform=node",
       "--format=cjs",
       `--outfile=${INTERCEPTOR_OUTPUT}`,
-    ],
+    ], ROOT_DIR),
     cwd: ROOT_DIR,
+    env: BUILD_ENV,
     stdout: "inherit",
     stderr: "inherit",
   });
@@ -180,14 +144,14 @@ async function buildSessionServer(): Promise<void> {
   }
 
   const proc = spawn({
-    cmd: [
-      "bun", "build",
+    cmd: buildBunCommand([ "build",
       join(SESSION_SERVER_DIR, "src/index.ts"),
       "--outfile", SESSION_SERVER_OUTPUT,
       "--target", "node",
       "--format", "cjs",
-    ],
+    ], ROOT_DIR),
     cwd: ROOT_DIR,
+    env: BUILD_ENV,
     stdout: "inherit",
     stderr: "inherit",
   });
@@ -228,15 +192,15 @@ async function buildPiAgentServer(): Promise<void> {
   // is ESM-only. --target=node --format=cjs leaves ESM deps as external require()
   // calls that fail at runtime since there are no node_modules relative to dist/.
   const proc = spawn({
-    cmd: [
-      "bun", "build",
+    cmd: buildBunCommand([ "build",
       join(PI_AGENT_SERVER_DIR, "src/index.ts"),
       "--outfile", PI_AGENT_SERVER_OUTPUT,
       "--target", "bun",
       "--format", "esm",
       "--external", "koffi",
-    ],
+    ], ROOT_DIR),
     cwd: ROOT_DIR,
+    env: BUILD_ENV,
     stdout: "inherit",
     stderr: "inherit",
   });
@@ -275,8 +239,7 @@ async function buildWhatsAppWorker(): Promise<void> {
   // self-contained. Dynamic `import('@whiskeysockets/baileys')` is resolved
   // at bundle time because the specifier is a literal.
   const proc = spawn({
-    cmd: [
-      "bun", "run", "esbuild",
+    cmd: buildBunCommand([ "run", "esbuild",
       WA_WORKER_SOURCE,
       "--bundle",
       "--platform=node",
@@ -290,8 +253,9 @@ async function buildWhatsAppWorker(): Promise<void> {
       "--external:link-preview-js",
       "--external:qrcode-terminal",
       "--external:jimp",
-    ],
+    ], ROOT_DIR),
     cwd: ROOT_DIR,
+    env: BUILD_ENV,
     stdout: "inherit",
     stderr: "inherit",
   });
@@ -311,8 +275,6 @@ async function buildWhatsAppWorker(): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  loadEnvFile();
-
   // Ensure dist directory exists
   if (!existsSync(DIST_DIR)) {
     mkdirSync(DIST_DIR, { recursive: true });
@@ -339,8 +301,7 @@ async function main(): Promise<void> {
   console.log("🔨 Building main process...");
 
   const proc = spawn({
-    cmd: [
-      "bun", "run", "esbuild",
+    cmd: buildBunCommand([ "run", "esbuild",
       "apps/electron/src/main/index.ts",
       "--bundle",
       "--platform=node",
@@ -362,8 +323,9 @@ async function main(): Promise<void> {
       "--alias:node-fetch=./apps/electron/src/main/shims/node-fetch.cjs",
       "--alias:abort-controller=./apps/electron/src/main/shims/abort-controller.cjs",
       ...buildDefines,
-    ],
+    ], ROOT_DIR),
     cwd: ROOT_DIR,
+    env: BUILD_ENV,
     stdout: "inherit",
     stderr: "inherit",
   });

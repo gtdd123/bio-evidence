@@ -1501,14 +1501,14 @@ describe('shouldAllowToolInMode - Bash plans folder exception', () => {
 
   describe('should allow bash writes to plans folder in safe mode', () => {
     it('should allow Codex-style zsh write to plans folder', () => {
-      const command = `/bin/zsh -lc "cat <<'EOF' > ${plansFolderPath}/my-plan.md\n# Plan\n## Steps\n1. Do thing\nEOF"`;
+      const command = `/bin/zsh -lc "cat <<'EOF' > \\"${plansFolderPath.replace(/\\/g, '/')}/my-plan.md\\"\n# Plan\n## Steps\n1. Do thing\nEOF"`;
       const result = shouldAllowToolInMode(
         'Bash',
         { command },
         'safe',
         { plansFolderPath }
       );
-      expect(result.allowed).toBe(true);
+      expect(result.allowed, result.allowed ? undefined : result.reason).toBe(true);
     });
 
     it('should allow direct redirect to plans folder', () => {

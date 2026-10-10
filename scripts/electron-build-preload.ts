@@ -9,9 +9,11 @@
 import { spawn } from "bun";
 import { existsSync, statSync, mkdirSync } from "fs";
 import { join } from "path";
+import { buildBunCommand, createBuildEnv } from './bio-build.mjs';
 
 const ROOT_DIR = join(import.meta.dir, "..");
 const DIST_DIR = join(ROOT_DIR, "apps/electron/dist");
+const BUILD_ENV = createBuildEnv();
 
 const OUTPUTS = [
   {
@@ -68,6 +70,7 @@ async function verifyJsFile(filePath: string): Promise<{ valid: boolean; error?:
 
   const proc = spawn({
     cmd: ["node", "--check", filePath],
+    env: BUILD_ENV,
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -84,16 +87,16 @@ async function verifyJsFile(filePath: string): Promise<{ valid: boolean; error?:
 
 async function buildEntry(entry: string, outfile: string): Promise<number> {
   const proc = spawn({
-    cmd: [
-      "bun", "run", "esbuild",
+    cmd: buildBunCommand([ "run", "esbuild",
       entry,
       "--bundle",
       "--platform=node",
       "--format=cjs",
       `--outfile=${outfile}`,
       "--external:electron",
-    ],
+    ], ROOT_DIR),
     cwd: ROOT_DIR,
+    env: BUILD_ENV,
     stdout: "inherit",
     stderr: "inherit",
   });

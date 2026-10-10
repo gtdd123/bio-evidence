@@ -30,7 +30,9 @@
     "jose": "^6.0.0",
     "ws": "^8.19.0",
     "sharp": "0.34.5",
-    "@earendil-works/pi-ai": "0.80.6"
+    "@earendil-works/pi-ai": "0.80.6",
+    "fast-xml-parser": "5.11.2",
+    "pdfjs-dist": "5.4.296"
   },
   "devDependencies": {
     "typescript": "^5.8.2",

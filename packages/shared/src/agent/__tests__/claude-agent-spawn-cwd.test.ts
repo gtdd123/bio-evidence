@@ -45,7 +45,7 @@ describe('isExistingDirectory', () => {
 
   it('returns false for a broken symlink (target missing)', () => {
     const linkPath = join(tempDir, 'broken-link');
-    symlinkSync(join(tempDir, 'no-such-target'), linkPath);
+    symlinkSync(join(tempDir, 'no-such-target'), linkPath, process.platform === 'win32' ? 'junction' : 'dir');
     // lstatSync returns SymbolicLink stats, isDirectory() is false → "missing"
     expect(isExistingDirectory(linkPath)).toBe(false);
   });

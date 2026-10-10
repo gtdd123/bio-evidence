@@ -1,3 +1,4 @@
+import { createClientDefines } from "../bio-build.mjs";
 /**
  * Windows-specific build logic (Node.js only - no Bun dependencies)
  *
@@ -140,19 +141,8 @@ function buildMainProcess(config: BuildConfig): void {
     '--alias:abort-controller=./apps/electron/src/main/shims/abort-controller.cjs',
   ];
 
-  // Add OAuth defines if env vars are set
-  const oauthDefines = [
-    ['GOOGLE_OAUTH_CLIENT_ID', process.env.GOOGLE_OAUTH_CLIENT_ID],
-    ['GOOGLE_OAUTH_CLIENT_SECRET', process.env.GOOGLE_OAUTH_CLIENT_SECRET],
-    ['SLACK_OAUTH_CLIENT_ID', process.env.SLACK_OAUTH_CLIENT_ID],
-    ['SLACK_OAUTH_CLIENT_SECRET', process.env.SLACK_OAUTH_CLIENT_SECRET],
-    ['MICROSOFT_OAUTH_CLIENT_ID', process.env.MICROSOFT_OAUTH_CLIENT_ID],
-  ];
-
-  for (const [key, value] of oauthDefines) {
-    if (value) {
-      mainArgs.push(`--define:process.env.${key}="'${value}'"`);
-    }
+  for (const [key, value] of Object.entries(createClientDefines())) {
+    mainArgs.push(`--define:${key}=${value}`);
   }
 
   // Use node to run esbuild directly

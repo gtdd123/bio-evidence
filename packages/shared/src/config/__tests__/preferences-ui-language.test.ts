@@ -1,3 +1,4 @@
+import { buildNamespaceEnv } from '../namespace.mjs';
 /**
  * Tests for the internal `uiLanguage` preference field that backs main-process
  * i18n hydration. See packages/shared/CLAUDE.md → "Cross-process language persistence".
@@ -22,7 +23,7 @@ interface RunResult {
 
 function runScript(configDir: string, script: string): RunResult {
   const result = Bun.spawnSync([process.execPath, '--eval', script], {
-    env: { ...process.env, CRAFT_CONFIG_DIR: configDir },
+    env: buildNamespaceEnv({ ...process.env, CRAFT_CONFIG_DIR: configDir, BIOEVIDENCE_CONFIG_DIR: configDir, CRAFT_SESSION_DIR: undefined }),
     stdout: 'pipe',
     stderr: 'pipe',
   });
@@ -128,11 +129,11 @@ describe('preferences.uiLanguage', () => {
           import { setPersistedUiLanguage } from '${PREFS_MODULE}';
           import { statSync } from 'fs';
           setPersistedUiLanguage('hu');
-          const first = statSync('${prefsFile}').mtimeMs;
+          const first = statSync(${JSON.stringify(prefsFile)}).mtimeMs;
           const start = Date.now();
           while (Date.now() - start < 30) {}
           setPersistedUiLanguage('hu');
-          const second = statSync('${prefsFile}').mtimeMs;
+          const second = statSync(${JSON.stringify(prefsFile)}).mtimeMs;
           console.log(JSON.stringify({ first, second }));
         `);
         expect(r.exitCode).toBe(0);

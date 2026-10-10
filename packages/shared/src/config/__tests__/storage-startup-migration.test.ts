@@ -1,3 +1,4 @@
+import { buildNamespaceEnv } from '../namespace.mjs';
 import { describe, expect, it } from 'bun:test'
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
@@ -68,10 +69,12 @@ function runMigration(configDir: string) {
     '--eval',
     `import '${PI_RESOLVER_SETUP_PATH}'; import { migrateLegacyLlmConnectionsConfig } from '${STORAGE_MODULE_PATH}'; migrateLegacyLlmConnectionsConfig();`,
   ], {
-    env: {
+    env: buildNamespaceEnv({
       ...process.env,
       CRAFT_CONFIG_DIR: configDir,
-    },
+      BIOEVIDENCE_CONFIG_DIR: configDir,
+      CRAFT_SESSION_DIR: undefined,
+    }),
     stdout: 'pipe',
     stderr: 'pipe',
   })

@@ -83,7 +83,8 @@ export async function handleTransformData(
   }
 
   // Write script to temp file
-  const ext = args.language === 'python3' ? '.py' : '.js';
+  // Node snippets use CommonJS independently of the parent directory's package type.
+  const ext = args.language === 'python3' ? '.py' : args.language === 'node' ? '.cjs' : '.js';
   const tempScript = join(tmpdir(), `craft-transform-${ctx.sessionId}-${Date.now()}${ext}`);
   writeFileSync(tempScript, args.script, 'utf-8');
 

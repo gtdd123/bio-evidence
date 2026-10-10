@@ -32,7 +32,7 @@ function createMockWebContents() {
       }
     }),
     loadFile: mock(async (_path: string, _opts?: unknown) => {
-      if (toolbarLoadFailuresRemaining > 0) {
+      if (_path.includes('browser-toolbar.html') && toolbarLoadFailuresRemaining > 0) {
         toolbarLoadFailuresRemaining--
         throw new Error('mock toolbar load failure')
       }
@@ -69,7 +69,10 @@ function createMockWebContents() {
     },
     _listeners: listeners,
     _emit: (event: string, ...args: any[]) => {
-      for (const cb of listeners[event] || []) cb({}, ...args)
+      for (const cb of listeners[event] || []) {
+        if (event === 'did-create-window') cb(...args)
+        else cb({}, ...args)
+      }
     },
   }
 }
@@ -289,14 +292,14 @@ describe('BrowserPaneManager', () => {
     const openHandler = instance.pageView.webContents.setWindowOpenHandler.mock.calls[0][0]
 
     const result = openHandler({
-      url: 'craftagents://settings',
+      url: 'bioevidence://settings',
       disposition: 'new-popup',
       frameName: '',
     })
 
     expect(result).toEqual({ action: 'deny' })
     await Bun.sleep(0)
-    expect(mockShellOpenExternal).toHaveBeenCalledWith('craftagents://settings')
+    expect(mockShellOpenExternal).toHaveBeenCalledWith('bioevidence://settings')
   })
 
   it('destroys child popups when parent instance is destroyed', () => {
@@ -579,6 +582,8 @@ describe('BrowserPaneManager', () => {
 
     const instance = (manager as any).instances.get('f1')
     instance.window._emit('ready-to-show')
+    instance.toolbarView.webContents.getURL = mock(() => 'file:///browser-toolbar.html')
+    instance.toolbarView.webContents._emit('did-finish-load')
 
     expect(instance.window.show).toHaveBeenCalled()
     expect(instance.window.focus).toHaveBeenCalled()
@@ -593,6 +598,8 @@ describe('BrowserPaneManager', () => {
 
     const instance = (manager as any).instances.get('f2')
     instance.window._emit('ready-to-show')
+    instance.toolbarView.webContents.getURL = mock(() => 'file:///browser-toolbar.html')
+    instance.toolbarView.webContents._emit('did-finish-load')
 
     expect(instance.window.show.mock.calls.length).toBe(1)
     expect(instance.window.focus.mock.calls.length).toBe(1)
@@ -609,6 +616,9 @@ describe('BrowserPaneManager', () => {
     const focusCallsBeforeReady = instance.window.focus.mock.calls.length
 
     instance.window._emit('ready-to-show')
+
+    instance.toolbarView.webContents.getURL = mock(() => 'file:///browser-toolbar.html')
+    instance.toolbarView.webContents._emit('did-finish-load')
 
     expect(instance.window.show.mock.calls.length).toBe(showCallsBeforeReady)
     expect(instance.window.focus.mock.calls.length).toBe(focusCallsBeforeReady)
@@ -671,7 +681,7 @@ describe('BrowserPaneManager', () => {
 
     await Bun.sleep(1400)
 
-    const toolbarWindow = createdWindows[0]
+    const toolbarWindow = (manager as any).instances.get('retry-toolbar').toolbarView
     const fileAttempts = toolbarWindow.webContents.loadFile.mock.calls.length
     const toolbarUrlAttempts = toolbarWindow.webContents.loadURL.mock.calls
       .filter((args: [string]) => args[0]?.includes('browser-toolbar.html')).length
@@ -687,7 +697,7 @@ describe('BrowserPaneManager', () => {
 
     await Bun.sleep(3200)
 
-    const toolbarWindow = createdWindows[0]
+    const toolbarWindow = (manager as any).instances.get('fallback-toolbar').toolbarView
     const fileAttempts = toolbarWindow.webContents.loadFile.mock.calls.length
     const toolbarUrlAttempts = toolbarWindow.webContents.loadURL.mock.calls
       .filter((args: [string]) => args[0]?.includes('browser-toolbar.html')).length
@@ -770,10 +780,10 @@ describe('BrowserPaneManager', () => {
     instance.canGoForward = false
     instance.themeColor = '#123456'
 
-    const sendsBeforeShow = instance.window.webContents.send.mock.calls.length
+    const sendsBeforeShow = instance.toolbarView.webContents.send.mock.calls.length
     instance.window._emit('show')
 
-    const sendCallsAfterShow = instance.window.webContents.send.mock.calls.slice(sendsBeforeShow)
+    const sendCallsAfterShow = instance.toolbarView.webContents.send.mock.calls.slice(sendsBeforeShow)
     expect(sendCallsAfterShow).toContainEqual([
       'browser-toolbar:state-update',
       {
@@ -801,10 +811,10 @@ describe('BrowserPaneManager', () => {
 
     instance.toolbarView.webContents.getURL = mock(() => 'http://localhost:5173/browser-toolbar.html?instanceId=toolbar-finish-load-replay')
 
-    const sendsBeforeFinishLoad = instance.window.webContents.send.mock.calls.length
+    const sendsBeforeFinishLoad = instance.toolbarView.webContents.send.mock.calls.length
     instance.toolbarView.webContents._emit('did-finish-load')
 
-    const sendCallsAfterFinishLoad = instance.window.webContents.send.mock.calls.slice(sendsBeforeFinishLoad)
+    const sendCallsAfterFinishLoad = instance.toolbarView.webContents.send.mock.calls.slice(sendsBeforeFinishLoad)
     expect(sendCallsAfterFinishLoad).toContainEqual([
       'browser-toolbar:state-update',
       {

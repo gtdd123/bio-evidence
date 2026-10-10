@@ -1,3 +1,4 @@
+import './bio-disabled-entry.mjs';
 /**
  * Cross-platform electron dev script
  * Replaces platform-specific npm scripts with a unified TypeScript solution
@@ -7,6 +8,7 @@ import { spawn, type Subprocess } from "bun";
 import { existsSync, rmSync, cpSync, readFileSync, statSync, mkdirSync } from "fs";
 import { join, basename } from "path";
 import * as esbuild from "esbuild";
+import { createClientDefines } from "./bio-build.mjs";
 import { downloadUv, type Platform, type Arch } from "./build/common";
 
 const ROOT_DIR = join(import.meta.dir, "..");
@@ -97,27 +99,7 @@ function detectInstance(): void {
 
 // Load .env file if it exists
 function loadEnvFile(): void {
-  const envPath = join(ROOT_DIR, ".env");
-  if (existsSync(envPath)) {
-    const content = readFileSync(envPath, "utf-8");
-    for (const line of content.split("\n")) {
-      const trimmed = line.trim();
-      if (trimmed && !trimmed.startsWith("#")) {
-        const eqIndex = trimmed.indexOf("=");
-        if (eqIndex > 0) {
-          const key = trimmed.slice(0, eqIndex).trim();
-          let value = trimmed.slice(eqIndex + 1).trim();
-          // Remove surrounding quotes if present
-          if ((value.startsWith('"') && value.endsWith('"')) ||
-              (value.startsWith("'") && value.endsWith("'"))) {
-            value = value.slice(1, -1);
-          }
-          process.env[key] = value;
-        }
-      }
-    }
-    console.log("📄 Loaded .env file");
-  }
+  throw new Error("Legacy dotenv loading is disabled; use explicit BioEvidence server configuration");
 }
 
 // Kill any process using the specified port
@@ -257,21 +239,7 @@ async function buildMcpServers(): Promise<void> {
 
 // Get OAuth defines for esbuild API
 function getOAuthDefines(): Record<string, string> {
-  const oauthVars = [
-    "GOOGLE_OAUTH_CLIENT_ID",
-    "GOOGLE_OAUTH_CLIENT_SECRET",
-    "SLACK_OAUTH_CLIENT_ID",
-    "SLACK_OAUTH_CLIENT_SECRET",
-    "MICROSOFT_OAUTH_CLIENT_ID",
-    "MICROSOFT_OAUTH_CLIENT_SECRET",
-  ];
-
-  const defines: Record<string, string> = {};
-  for (const varName of oauthVars) {
-    const value = process.env[varName] || "";
-    defines[`process.env.${varName}`] = JSON.stringify(value);
-  }
-  return defines;
+  return createClientDefines();
 }
 
 // Get environment variables for electron process
