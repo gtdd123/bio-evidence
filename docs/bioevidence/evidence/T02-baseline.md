@@ -93,3 +93,5 @@ Plan 第 18 节与 Tasks T02 补充记录同一关闭门槛。T17 必须完整�
 最终补充：`node scripts/bio-launch.mjs test run test:shared:all` 三个子套件均 0 fail、外层 **exit 0**（最后 config 套件 84 pass）；最新扫描覆盖候选源码 **1901 文件**、实际产物六个根 **1554 文件**，已知宿主凭据值 **0 hits**，含真实 messaging-whatsapp-worker/dist，不显示值。文档更新后 `git diff --check` **exit 0**。延期 Plan/Tasks 与仓库副本已同步，Constitution/Spec 副本与已批准原文一致。
 
 2026-10-10 `/root/t02_independent_judge` 最终只读审批 **T02 阶段 PASS，允许按修订计划进入 T03**，同时批准 Plan 第18节、Tasks T02 门槛及此记录；独立复扫1777产物合成marker零命中。审批不把完整基线4920/1/17/0或Python0/8改写为通过。
+
+提交过程补充：首次 `git diff --cached --check` 对新加入的四份批准文档报 Markdown 两空格硬换行，**exit 1**；root 误继续产生本地提交 `03d3253`，不记为检查通过。随后把硬换行改为空行，内容逐字规范化比较不变、双副本同步，实际 `git diff --check` **exit 0**，独立评判批准格式及审批元数据修正。修正另存提交，保留原记录。
