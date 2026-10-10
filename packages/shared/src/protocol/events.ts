@@ -8,6 +8,7 @@ import type { LoadedSource } from '../sources/types'
 import type { LoadedSkill } from '../skills/types'
 import type { LoadedProject } from '../projects/types'
 import { RPC_CHANNELS } from './channels'
+import type { ResearchEvent } from '@bio-evidence/research-core'
 import type {
   SessionEvent,
   UnreadSummary,
@@ -18,6 +19,7 @@ import type {
 } from './dto'
 
 export interface BroadcastEventMap {
+  [RPC_CHANNELS.research.EVENT]: [event: ResearchEvent]
   // Session events (workspace-scoped via broadcastToWorkspace)
   [RPC_CHANNELS.sessions.EVENT]: [event: SessionEvent]
   [RPC_CHANNELS.sessions.UNREAD_SUMMARY_CHANGED]: [summary: UnreadSummary]

@@ -22,6 +22,8 @@
   ],
   "scripts": {
     "test": "node scripts/bio-tests.mjs",
+    "test:bio": "node scripts/bio-launch.mjs test test packages/research-core/src packages/shared/src/protocol/__tests__/research.test.ts",
+    "bio:typecheck": "tsc --noEmit -p packages/research-core/tsconfig.json",
     "typecheck": "bun run typecheck:shared",
     "typecheck:shared": "cd packages/shared && bun run tsc --noEmit",
     "typecheck:staged": "bash scripts/typecheck-staged.sh",

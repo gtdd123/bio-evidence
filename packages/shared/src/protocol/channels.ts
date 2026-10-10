@@ -3,7 +3,10 @@
  * Wire-format strings (values) are the stable API contract.
  * Key paths are internal and may be reorganized freely.
  */
+import { RESEARCH_CHANNELS } from '@bio-evidence/research-core';
+
 export const RPC_CHANNELS = {
+  research: RESEARCH_CHANNELS,
   remote: {
     TEST_CONNECTION: 'remote:testConnection',
   },

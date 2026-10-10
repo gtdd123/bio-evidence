@@ -72,7 +72,10 @@ export interface WireError {
 // Error codes
 // ---------------------------------------------------------------------------
 
+import type { BioErrorCode } from '@bio-evidence/research-core'
+
 export type ErrorCode =
+  | BioErrorCode
   | 'HANDLER_ERROR'
   | 'CHANNEL_NOT_FOUND'
   | 'AUTH_FAILED'

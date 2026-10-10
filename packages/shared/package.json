@@ -69,6 +69,7 @@
     "./resources": "./src/resources/index.ts"
   },
   "dependencies": {
+    "@bio-evidence/research-core": "workspace:*",
     "@craft-agent/core": "workspace:*",
     "@craft-agent/session-tools-core": "workspace:*",
     "@isaacs/ttlcache": "^2.1.4",
