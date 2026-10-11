@@ -1,0 +1,376 @@
+// Bun-only adapter. Do not export it from server-core's Node/Electron entry.
+import { Database, type SQLQueryBindings } from 'bun:sqlite';
+import { createHash, randomUUID } from 'node:crypto';
+import { dirname, relative, resolve, isAbsolute, sep } from 'node:path';
+import { mkdirSync, realpathSync, existsSync, writeFileSync } from 'node:fs';
+import { z } from 'zod';
+import {
+  ActorSchema, ScopeSchema, IdSchema, GenerationSchema, SourceSchema, SnapshotSchema,
+  EvidenceRevisionSchema, ReportRevisionSchema, SessionSchema, RunSchema, ResearchError,
+  parseContract, assertScopeAccess, assertSessionControl, sameScope, assertSnapshotSource, validateCitation,
+  mergeSessionPolicy, transitionRun, RunStateSchema,
+  type Actor, type ResearchScope, type ResearchEntity, type ResearchEntityKind,
+  type ResearchRepository, type AuthorityUser, type JsonValue, type ProjectionEntry, type ResearchRun, type RunState,
+  type EvidenceRevision, type ReportRevision,
+} from '@bio-evidence/research-core';
+import { resolveConfigDir, validateNamespacePath } from '@craft-agent/shared/config/namespace';
+import { INITIAL_SCHEMA, SCHEMA_VERSION } from './schema.ts';
+
+const Schemas = { source: SourceSchema, snapshot: SnapshotSchema, evidence: EvidenceRevisionSchema,
+  report: ReportRevisionSchema, session: SessionSchema, run: RunSchema } as const;
+const KindSchema = z.enum(['source', 'snapshot', 'evidence', 'report', 'session', 'run']);
+const UserSchema = z.strictObject({ id: IdSchema, username: z.string().min(1).max(128), passwordHash: z.string().min(1).max(4096),
+  active: z.boolean(), administrator: z.boolean(), revision: z.literal(1) });
+const digest = (value: string) => createHash('sha256').update(value).digest('hex');
+const scopeKey = (scope: ResearchScope) => scope.kind === 'personal' ? `personal:${scope.ownerId}` : `project:${scope.projectId}`;
+type UserRow = { id: string; username: string; password_hash: string; active: number; administrator: number; revision: number };
+type HeadRow = { revision: number; record_id: string; policy: string | null };
+
+export class SqliteResearchRepository implements ResearchRepository {
+  private db!: Database;
+  private statements = new Set<{ finalize(): void }>();
+  private readonly instanceId = randomUUID();
+  private closed = false;
+  private query<Row = unknown, Params extends SQLQueryBindings[] = SQLQueryBindings[]>(sql: string) {
+    const database = this.db;
+    const statement = database.query<Row, Params>(sql);
+    this.statements.add(statement);
+    return statement;
+  }
+  constructor(filename = ':memory:') {
+    try {
+      if (filename !== ':memory:') {
+        filename = validateNamespacePath(resolve(filename));
+        const root = resolveConfigDir();
+        mkdirSync(root, { recursive: true });
+        const realRoot = realpathSync.native(root);
+        let ancestor = dirname(filename);
+        while (!existsSync(ancestor)) ancestor = dirname(ancestor);
+        const offset = relative(realRoot, realpathSync.native(ancestor));
+        if (offset === '..' || offset.startsWith(`..${sep}`) || isAbsolute(offset)) throw new ResearchError('BIO_STORAGE_UNAVAILABLE');
+        mkdirSync(dirname(filename), { recursive: true });
+        if (existsSync(filename)) {
+          const target = relative(realRoot, realpathSync.native(filename));
+          if (target === '..' || target.startsWith(`..${sep}`) || isAbsolute(target)) throw new ResearchError('BIO_STORAGE_UNAVAILABLE');
+          filename = realpathSync.native(filename);
+        }
+      }
+      this.db = new Database(filename, { create: true, strict: true });
+      this.db.exec('PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL;');
+      const version = this.query<{ user_version: number }, []>('PRAGMA user_version').get()!.user_version;
+      if (version > SCHEMA_VERSION) throw new ResearchError('BIO_STORAGE_UNAVAILABLE');
+      if (version === 0) {
+        const existing = this.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all();
+        if (existing.length) throw new ResearchError('BIO_STORAGE_UNAVAILABLE');
+        if (filename !== ':memory:') writeFileSync(`${filename}.backup-v0-${randomUUID()}`, this.db.serialize(), { flag: 'wx', mode: 0o600 });
+        this.db.transaction(() => this.db.exec(INITIAL_SCHEMA)).immediate();
+      }
+      this.db.transaction(() => {
+        const old = this.query<{ owner_nonce: string | null; owner_pid: number | null }, []>('SELECT owner_nonce,owner_pid FROM service_instance WHERE singleton=1').get();
+        if (old?.owner_nonce && old.owner_pid) {
+          let alive = true;
+          try { process.kill(old.owner_pid, 0); } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'ESRCH') alive = false;
+          }
+          if (alive) throw new ResearchError('BIO_STORAGE_UNAVAILABLE');
+        }
+        this.query('INSERT INTO service_instance VALUES(1,?,?) ON CONFLICT(singleton) DO UPDATE SET owner_nonce=excluded.owner_nonce,owner_pid=excluded.owner_pid')
+          .run(this.instanceId, process.pid);
+      }).immediate();
+    } catch {
+      this.close();
+      throw new ResearchError('BIO_STORAGE_UNAVAILABLE');
+    }
+  }
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    try { if (this.db) this.query('UPDATE service_instance SET owner_nonce=NULL,owner_pid=NULL WHERE singleton=1 AND owner_nonce=?').run(this.instanceId); }
+    catch { /* cannot release an unknown or unavailable store */ }
+    finally {
+      for (const statement of this.statements) statement.finalize();
+      this.statements.clear();
+      this.db?.close(true);
+    }
+  }
+  private assertWriter() {
+    const row = this.query<{ owner_nonce: string | null }, []>('SELECT owner_nonce FROM service_instance WHERE singleton=1').get();
+    if (this.closed || row?.owner_nonce !== this.instanceId) throw new ResearchError('BIO_STORAGE_UNAVAILABLE');
+  }
+  private audit(actorId: string, scope: ResearchScope | null, action: string, outcome: 'success' | 'denied' | 'failed', resourceId: string | null) {
+    this.query('INSERT INTO audit(actor_id,scope_key,action,outcome,resource_id,created_at) VALUES(?,?,?,?,?,?)')
+      .run(actorId, scope ? scopeKey(scope) : null, action, outcome, resourceId, Date.now());
+  }
+  private event(scope: ResearchScope, kind: string, id: string, revision: number) {
+    this.query('INSERT INTO outbox(scope_key,kind,resource_id,revision,created_at) VALUES(?,?,?,?,?)').run(scopeKey(scope), kind, id, revision, Date.now());
+  }
+  private currentActor(input: Actor): Actor {
+    const user = this.query<Pick<UserRow, 'active' | 'administrator'>, [string]>('SELECT active,administrator FROM users WHERE id=?').get(input.userId);
+    if (!user?.active || !input.active) throw new ResearchError('BIO_ACCESS_DENIED');
+    return { ...input, active: true, administrator: user.administrator === 1 };
+  }
+  private tx<T>(input: Actor, scope: ResearchScope | null, action: string, id: string | null, work: (actor: Actor) => T): T {
+    const actor = parseContract(ActorSchema, input);
+    try {
+      return this.db.transaction(() => {
+        this.assertWriter();
+        const result = work(this.currentActor(actor));
+        this.audit(actor.userId, scope, action, 'success', id);
+        return result;
+      }).immediate();
+    } catch (error) {
+      try { this.audit(actor.userId, scope, action, error instanceof ResearchError && error.code === 'BIO_ACCESS_DENIED' ? 'denied' : 'failed', id); }
+      catch { throw new ResearchError('BIO_STORAGE_UNAVAILABLE'); }
+      if (error instanceof ResearchError) throw error;
+      throw new ResearchError('BIO_STORAGE_UNAVAILABLE');
+    }
+  }
+  private authorize(actor: Actor, scope: ResearchScope, action: 'read' | 'write' | 'manage') {
+    const member = scope.kind === 'project' ? this.query<{ role: 'owner' | 'editor' | 'viewer'; active: number }, [string, string]>(
+      'SELECT role,active FROM members WHERE project_id=? AND user_id=?',
+    ).get(scope.projectId, actor.userId) : null;
+    assertScopeAccess(this.currentActor(actor), scope, member && scope.kind === 'project' ? {
+      projectId: scope.projectId, userId: actor.userId, role: member.role, active: member.active === 1,
+    } : null, action);
+  }
+  private binding(kind: string, id: string): ResearchScope {
+    const row = this.query<{ scope_json: string }, [string, string]>(
+      'SELECT s.scope_json FROM bindings b JOIN spaces s ON b.scope_key=s.scope_key WHERE b.kind=? AND b.id=?',
+    ).get(kind, id);
+    if (!row) throw new ResearchError('BIO_ACCESS_DENIED');
+    return parseContract(ScopeSchema, JSON.parse(row.scope_json));
+  }
+  seedUser(input: AuthorityUser): void {
+    const user = parseContract(UserSchema, input);
+    this.db.transaction(() => {
+      this.assertWriter();
+      this.query('INSERT INTO users VALUES(?,?,?,?,?,?)').run(user.id, user.username, user.passwordHash, Number(user.active), Number(user.administrator), 1);
+      const scope: ResearchScope = { kind: 'personal', ownerId: user.id };
+      this.query('INSERT INTO spaces VALUES(?,?,?)').run(scopeKey(scope), JSON.stringify(scope), user.id);
+    }).immediate();
+  }
+  getUserForAuth(username: string): AuthorityUser | null {
+    const user = this.query<UserRow, [string]>('SELECT * FROM users WHERE username=?').get(username);
+    return user ? { id: user.id, username: user.username, passwordHash: user.password_hash, active: user.active === 1,
+      administrator: user.administrator === 1, revision: user.revision } : null;
+  }
+  createProject(actor: Actor, idInput: string, nameInput: string) {
+    const id = parseContract(IdSchema, idInput);
+    const name = parseContract(z.string().min(1).max(300), nameInput);
+    const scope: ResearchScope = { kind: 'project', projectId: id };
+    return this.tx(actor, scope, 'project-create', id, current => {
+      this.query('INSERT INTO projects VALUES(?,?,?,?)').run(id, name, current.userId, 1);
+      this.query('INSERT INTO spaces VALUES(?,?,?)').run(scopeKey(scope), JSON.stringify(scope), current.userId);
+      this.query('INSERT INTO members VALUES(?,?,?,?)').run(id, current.userId, 'owner', 1);
+      this.event(scope, 'project', id, 1);
+      return { id, name, revision: 1 };
+    });
+  }
+  setMember(actor: Actor, projectId: string, userId: string, roleInput: 'owner' | 'editor' | 'viewer', active: boolean, expectedRevision: number) {
+    parseContract(IdSchema, projectId); parseContract(IdSchema, userId);
+    parseContract(GenerationSchema, expectedRevision); parseContract(z.boolean(), active);
+    const role = parseContract(z.enum(['owner', 'editor', 'viewer']), roleInput);
+    const scope: ResearchScope = { kind: 'project', projectId };
+    return this.tx(actor, scope, 'membership-change', projectId, current => {
+      this.authorize(current, scope, 'manage');
+      const project = this.query<{ owner_id: string; revision: number }, [string]>('SELECT owner_id,revision FROM projects WHERE id=?').get(projectId)!;
+      if (project.revision !== expectedRevision) throw new ResearchError('BIO_REVISION_CONFLICT');
+      if (project.owner_id === userId && (!active || role !== 'owner')) throw new ResearchError('BIO_ACCESS_DENIED');
+      this.query('INSERT INTO members VALUES(?,?,?,?) ON CONFLICT(project_id,user_id) DO UPDATE SET role=excluded.role,active=excluded.active')
+        .run(projectId, userId, role, Number(active));
+      this.query('UPDATE projects SET revision=revision+1 WHERE id=? AND revision=?').run(projectId, expectedRevision);
+      this.event(scope, 'membership', projectId, expectedRevision + 1);
+      return { revision: expectedRevision + 1 };
+    });
+  }
+  get(input: Actor, kindInput: ResearchEntityKind, idInput: string): ResearchEntity {
+    const kind = parseContract(KindSchema, kindInput);
+    const id = parseContract(IdSchema, idInput);
+    let scope: ResearchScope | null = null;
+    try { scope = this.binding(kind, id); } catch {
+      return this.tx(input, { kind: 'personal', ownerId: input.userId }, 'resource-read', id, () => { throw new ResearchError('BIO_ACCESS_DENIED'); });
+    }
+    return this.tx(input, scope, 'resource-read', id, actor => {
+      this.authorize(actor, scope!, 'read');
+      const row = this.query<{ payload: string }, [string, string]>('SELECT payload FROM entities WHERE kind=? AND id=?').get(kind, id);
+      if (!row) throw new ResearchError('BIO_ACCESS_DENIED');
+      const payload = JSON.parse(row.payload) as Record<string, unknown>;
+      const review = this.query<{ decision: string; reviewer_id: string; reviewed_at: number; revision: number }, [string, string]>(
+        'SELECT * FROM reviews WHERE kind=? AND record_id=?',
+      ).get(kind, id);
+      if (review) Object.assign(payload, { reviewStatus: review.decision, review: {
+        reviewerId: review.reviewer_id, reviewedAt: review.reviewed_at, revisionId: id, revisionNumber: review.revision,
+      } });
+      return parseContract(Schemas[kind] as z.ZodType<ResearchEntity>, payload);
+    });
+  }
+  put(actor: Actor, kindInput: ResearchEntityKind, input: unknown, expectedRevision = 0): ResearchEntity {
+    const kind = parseContract(KindSchema, kindInput);
+    const value = parseContract(Schemas[kind] as z.ZodType<ResearchEntity>, input);
+    parseContract(GenerationSchema, expectedRevision);
+    return this.tx(actor, value.scope, `${kind}-write`, value.id, current => {
+      this.authorize(current, value.scope, 'write');
+      const entityId = kind === 'evidence' ? (value as z.infer<typeof EvidenceRevisionSchema>).evidenceId :
+        kind === 'report' ? (value as z.infer<typeof ReportRevisionSchema>).reportId : value.id;
+      const head = this.query<HeadRow, [string, string]>('SELECT revision,record_id,policy FROM heads WHERE kind=? AND entity_id=?').get(kind, entityId);
+      if ((head?.revision ?? 0) !== expectedRevision) throw new ResearchError('BIO_REVISION_CONFLICT');
+      if (head && !sameScope(this.binding(kind, head.record_id), value.scope)) throw new ResearchError('BIO_ACCESS_DENIED');
+      if ('policy' in value && head?.policy && mergeSessionPolicy(head.policy, [value.policy]) !== value.policy) throw new ResearchError('BIO_POLICY_DENIED');
+      if ('revision' in value && value.revision !== expectedRevision + 1) throw new ResearchError('BIO_REVISION_CONFLICT');
+      if (kind === 'snapshot') {
+        if (head) throw new ResearchError('BIO_REVISION_CONFLICT');
+        const snapshot = value as z.infer<typeof SnapshotSchema>;
+        assertSnapshotSource(snapshot, this.get(current, 'source', snapshot.sourceId));
+      }
+      if (kind === 'session') {
+        const session = value as z.infer<typeof SessionSchema>;
+        if (session.ownerId !== current.userId || (head && parseContract(SessionSchema, this.get(current, 'session', head.record_id)).ownerId !== session.ownerId)) {
+          throw new ResearchError('BIO_ACCESS_DENIED');
+        }
+      }
+      if (kind === 'run') {
+        const run = value as ResearchRun;
+        const session = parseContract(SessionSchema, this.get(current, 'session', run.sessionId));
+        if (run.actorId !== session.ownerId || current.userId !== session.ownerId || !sameScope(run.scope, session.scope)) throw new ResearchError('BIO_ACCESS_DENIED');
+        if (head || run.state !== 'queued') throw new ResearchError('BIO_INVALID_TRANSITION');
+      }
+      if ((kind === 'evidence' || kind === 'report') && ('reviewStatus' in value && (value.reviewStatus !== 'unreviewed' || 'review' in value && value.review))) {
+        throw new ResearchError('BIO_INPUT_INVALID');
+      }
+      if (kind === 'evidence') {
+        const evidence = value as z.infer<typeof EvidenceRevisionSchema>;
+        for (const ref of evidence.citations) {
+          const snapshot = parseContract(SnapshotSchema, this.get(current, 'snapshot', ref.snapshotId));
+          if (!sameScope(snapshot.scope, evidence.scope)) throw new ResearchError('BIO_ACCESS_DENIED');
+          if (evidence.structuralStatus === 'structure-valid' && validateCitation(snapshot, ref).status !== 'structure-valid') throw new ResearchError('BIO_INPUT_INVALID');
+        }
+      }
+      if (kind === 'report') for (const id of (value as z.infer<typeof ReportRevisionSchema>).evidenceRevisionIds) {
+        const evidence = parseContract(EvidenceRevisionSchema, this.get(current, 'evidence', id));
+        if (!sameScope(evidence.scope, value.scope)) throw new ResearchError('BIO_ACCESS_DENIED');
+        if ('structuralStatus' in value && value.structuralStatus === 'structure-valid' && evidence.structuralStatus !== 'structure-valid') throw new ResearchError('BIO_INPUT_INVALID');
+      }
+      if (('review' in value && value.review && value.review.reviewerId !== current.userId) ||
+          ('authorId' in value && value.authorId !== current.userId)) throw new ResearchError('BIO_ACCESS_DENIED');
+      const oldBinding = this.query<{ scope_key: string }, [string, string]>('SELECT scope_key FROM bindings WHERE kind=? AND id=?').get(kind, value.id);
+      if (oldBinding && oldBinding.scope_key !== scopeKey(value.scope)) throw new ResearchError('BIO_ACCESS_DENIED');
+      if (oldBinding && ['snapshot', 'evidence', 'report'].includes(kind)) throw new ResearchError('BIO_REVISION_CONFLICT');
+      this.query('INSERT INTO bindings VALUES(?,?,?) ON CONFLICT(kind,id) DO NOTHING').run(kind, value.id, scopeKey(value.scope));
+      this.query('INSERT INTO entities VALUES(?,?,?,?) ON CONFLICT(kind,id) DO UPDATE SET payload=excluded.payload')
+        .run(kind, value.id, scopeKey(value.scope), JSON.stringify(value));
+      this.query('INSERT INTO heads VALUES(?,?,?,?,?) ON CONFLICT(kind,entity_id) DO UPDATE SET record_id=excluded.record_id,revision=excluded.revision,policy=excluded.policy')
+        .run(kind, entityId, value.id, expectedRevision + 1, 'policy' in value ? value.policy : null);
+      if (kind === 'snapshot') for (const block of (value as z.infer<typeof SnapshotSchema>).blocks) {
+        this.query('INSERT INTO snapshot_blocks VALUES(?,?,?,?,?)').run(value.id, block.id, block.unit, block.text, JSON.stringify(block.locator));
+      }
+      if (kind === 'run') {
+        this.query('DELETE FROM run_leases WHERE run_id=?').run(value.id);
+        const lease = (value as ResearchRun).lease;
+        if (lease) this.query('INSERT INTO run_leases VALUES(?,?,?,?)').run(value.id, lease.workerId, lease.generation, lease.expiresAt);
+      }
+      this.event(value.scope, kind, value.id, expectedRevision + 1);
+      return value;
+    });
+  }
+  appendProjection(actor: Actor, sessionId: string, operationId: string, messagesInput: JsonValue[], generation: number): number {
+    parseContract(IdSchema, sessionId); parseContract(IdSchema, operationId); parseContract(GenerationSchema, generation);
+    const messages = parseContract(z.array(z.json()).min(1).max(10000), messagesInput);
+    const messageShape = z.object({ id: IdSchema, role: z.enum(['user', 'assistant', 'tool', 'error', 'status', 'info', 'warning', 'plan', 'auth-request']),
+      content: z.union([z.string(), z.array(z.json())]), timestamp: GenerationSchema }).passthrough();
+    for (const message of messages) parseContract(messageShape, message);
+    const payload = JSON.stringify(messages);
+    if (Buffer.byteLength(payload) > 8 * 1024 * 1024) throw new ResearchError('BIO_INPUT_INVALID');
+    const session = parseContract(SessionSchema, this.get(actor, 'session', sessionId));
+    return this.tx(actor, session.scope, 'projection-append', sessionId, current => {
+      this.authorize(current, session.scope, 'write');
+      if (session.ownerId !== current.userId) throw new ResearchError('BIO_ACCESS_DENIED');
+      const previous = this.query<{ sequence: number; hash: string; generation: number }, [string, string]>(
+        'SELECT sequence,hash,generation FROM projection_journal WHERE session_id=? AND operation_id=?',
+      ).get(sessionId, operationId);
+      const hash = digest(payload);
+      if (previous) {
+        if (previous.hash !== hash || previous.generation !== generation) throw new ResearchError('BIO_REVISION_CONFLICT');
+        return previous.sequence;
+      }
+      return Number(this.query('INSERT INTO projection_journal(session_id,operation_id,scope_key,generation,payload,hash) VALUES(?,?,?,?,?,?)')
+        .run(sessionId, operationId, scopeKey(session.scope), generation, payload, hash).lastInsertRowid);
+    });
+  }
+  reviewRevision(actor: Actor, kind: 'evidence' | 'report', id: string, expectedRevision: number,
+    decision: 'confirmed' | 'needs-changes', now: number): EvidenceRevision | ReportRevision {
+    parseContract(z.enum(['evidence', 'report']), kind); parseContract(IdSchema, id);
+    parseContract(GenerationSchema, expectedRevision); parseContract(GenerationSchema, now);
+    parseContract(z.enum(['confirmed', 'needs-changes']), decision);
+    const scope = this.binding(kind, id);
+    return this.tx(actor, scope, 'human-review', id, current => {
+      this.authorize(current, scope, 'write');
+      const value = kind === 'evidence' ? parseContract(EvidenceRevisionSchema, this.get(current, kind, id)) :
+        parseContract(ReportRevisionSchema, this.get(current, kind, id));
+      const entityId = 'evidenceId' in value ? value.evidenceId : value.reportId;
+      const head = this.query<HeadRow, [string, string]>('SELECT * FROM heads WHERE kind=? AND entity_id=?').get(kind, entityId);
+      if (value.revision !== expectedRevision || head?.record_id !== id || head.revision !== expectedRevision) {
+        throw new ResearchError('BIO_REVISION_CONFLICT');
+      }
+      const next = parseContract((kind === 'evidence' ? EvidenceRevisionSchema : ReportRevisionSchema) as z.ZodType<EvidenceRevision | ReportRevision>, {
+        ...value, reviewStatus: decision, review: { reviewerId: current.userId, reviewedAt: now, revisionId: id, revisionNumber: expectedRevision },
+      });
+      this.query('INSERT INTO reviews VALUES(?,?,?,?,?,?) ON CONFLICT(kind,record_id) DO UPDATE SET decision=excluded.decision,reviewer_id=excluded.reviewer_id,reviewed_at=excluded.reviewed_at,revision=excluded.revision')
+        .run(kind, id, decision, current.userId, now, expectedRevision);
+      this.event(scope, 'human-review', id, expectedRevision);
+      return next;
+    });
+  }
+  advanceRun(actor: Actor, id: string, nextInput: RunState, expectedGeneration: number, workerId: string | null,
+    now: number, leaseExpiresAt?: number): ResearchRun {
+    parseContract(IdSchema, id); parseContract(GenerationSchema, expectedGeneration); parseContract(GenerationSchema, now);
+    const next = parseContract(RunStateSchema, nextInput);
+    const scope = this.binding('run', id);
+    return this.tx(actor, scope, 'run-transition', id, current => {
+      const run = parseContract(RunSchema, this.get(current, 'run', id));
+      const session = parseContract(SessionSchema, this.get(current, 'session', run.sessionId));
+      const member = scope.kind === 'project' ? this.query<{ role: 'owner' | 'editor' | 'viewer'; active: number }, [string, string]>(
+        'SELECT role,active FROM members WHERE project_id=? AND user_id=?',
+      ).get(scope.projectId, current.userId) : null;
+      assertSessionControl(current, session, member && scope.kind === 'project' ? {
+        projectId: scope.projectId, userId: current.userId, role: member.role, active: member.active === 1,
+      } : null, next === 'cancelled' ? 'cancel' : 'execute');
+      if (run.actorId !== current.userId || run.generation !== expectedGeneration) throw new ResearchError('BIO_REVISION_CONFLICT');
+      const lease = this.query<{ worker_id: string; generation: number; expires_at: number }, [string]>(
+        'SELECT worker_id,generation,expires_at FROM run_leases WHERE run_id=?',
+      ).get(id);
+      if (next === 'completed' || next === 'failed') {
+        if (!lease || lease.worker_id !== workerId || lease.generation !== expectedGeneration || lease.expires_at <= now) {
+          throw new ResearchError('BIO_REVISION_CONFLICT');
+        }
+      }
+      const proposedLease = next === 'running' ? { runId: id, workerId: parseContract(IdSchema, workerId),
+        generation: expectedGeneration, expiresAt: parseContract(GenerationSchema, leaseExpiresAt) } : undefined;
+      const result = transitionRun(run, next, expectedGeneration, now, proposedLease);
+      const head = this.query<HeadRow, [string, string]>('SELECT * FROM heads WHERE kind=? AND entity_id=?').get('run', id);
+      if (head?.revision !== run.revision || head.record_id !== id) throw new ResearchError('BIO_REVISION_CONFLICT');
+      this.query('UPDATE entities SET payload=? WHERE kind=? AND id=?').run(JSON.stringify(result), 'run', id);
+      this.query('UPDATE heads SET revision=? WHERE kind=? AND entity_id=? AND revision=?').run(result.revision, 'run', id, run.revision);
+      this.query('DELETE FROM run_leases WHERE run_id=?').run(id);
+      if (result.lease) this.query('INSERT INTO run_leases VALUES(?,?,?,?)').run(id, result.lease.workerId, result.lease.generation, result.lease.expiresAt);
+      this.event(scope, 'run', id, result.revision);
+      return result;
+    });
+  }
+  readProjection(actor: Actor, sessionId: string): ProjectionEntry[] {
+    this.get(actor, 'session', sessionId);
+    return this.query<{ sequence: number; operation_id: string; generation: number; payload: string; hash: string; projected: number }, [string]>(
+      'SELECT * FROM projection_journal WHERE session_id=? ORDER BY sequence',
+    ).all(sessionId).map(row => ({ sequence: row.sequence, sessionId, operationId: row.operation_id,
+      generation: row.generation, hash: row.hash, messages: JSON.parse(row.payload) as JsonValue[], projected: row.projected === 1 }));
+  }
+  readAudit(actor: Actor, scope: ResearchScope) {
+    this.authorize(actor, scope, scope.kind === 'project' ? 'manage' : 'read');
+    return this.query<{ action: string; outcome: string; resource_id: string | null }, [string]>(
+      'SELECT action,outcome,resource_id FROM audit WHERE scope_key=? ORDER BY id',
+    ).all(scopeKey(scope)).map(row => ({ action: row.action, outcome: row.outcome, resourceId: row.resource_id }));
+  }
+  counts() {
+    return { audit: this.query<{ count: number }, []>('SELECT count(*) AS count FROM audit').get()!.count,
+      outbox: this.query<{ count: number }, []>('SELECT count(*) AS count FROM outbox').get()!.count };
+  }
+}

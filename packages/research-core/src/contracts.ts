@@ -198,6 +198,7 @@ export const BIO_ERROR_MESSAGES = {
   BIO_POLICY_DENIED: 'This context cannot be sent to a cloud model.',
   BIO_REVISION_CONFLICT: 'The revision has changed. Refresh before saving.',
   BIO_INVALID_TRANSITION: 'The research run cannot enter that state.',
+  BIO_STORAGE_UNAVAILABLE: 'Research storage is unavailable.',
 } as const;
 export type BioErrorCode = keyof typeof BIO_ERROR_MESSAGES;
 export class ResearchError extends Error {

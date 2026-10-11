@@ -22,7 +22,7 @@
   ],
   "scripts": {
     "test": "node scripts/bio-tests.mjs",
-    "test:bio": "node scripts/bio-launch.mjs test test packages/research-core/src packages/shared/src/protocol/__tests__/research.test.ts",
+    "test:bio": "node scripts/bio-launch.mjs test test packages/research-core/src packages/shared/src/protocol/__tests__/research.test.ts packages/server-core/src/research",
     "bio:typecheck": "tsc --noEmit -p packages/research-core/tsconfig.json",
     "typecheck": "bun run typecheck:shared",
     "typecheck:shared": "cd packages/shared && bun run tsc --noEmit",

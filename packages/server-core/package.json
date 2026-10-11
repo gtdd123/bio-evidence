@@ -25,6 +25,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@bio-evidence/research-core": "workspace:*",
     "@craft-agent/core": "workspace:*",
     "@craft-agent/shared": "workspace:*",
     "jose": "^6.0.0",
