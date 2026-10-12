@@ -72,7 +72,7 @@ export interface WireError {
 // Error codes
 // ---------------------------------------------------------------------------
 
-import type { BioErrorCode } from '@bio-evidence/research-core'
+import { BIO_ERROR_MESSAGES, type BioErrorCode } from '@bio-evidence/research-core'
 
 export type ErrorCode =
   | BioErrorCode
@@ -96,6 +96,7 @@ export type ErrorCode =
   | 'BROWSER_REMOTE_EVALUATE_BLOCKED'
 
 const KNOWN_ERROR_CODES: ReadonlySet<string> = new Set<ErrorCode>([
+  ...Object.keys(BIO_ERROR_MESSAGES) as BioErrorCode[],
   'HANDLER_ERROR',
   'CHANNEL_NOT_FOUND',
   'AUTH_FAILED',

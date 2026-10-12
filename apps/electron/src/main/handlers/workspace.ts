@@ -26,7 +26,7 @@ export async function connectToRemote(url: string, token: string, workspaceId?: 
     token,
     workspaceId,
     autoReconnect: false,
-    tlsRejectUnauthorized: false,
+    tlsRejectUnauthorized: true,
     requestTimeout: opts?.requestTimeout,
   })
 

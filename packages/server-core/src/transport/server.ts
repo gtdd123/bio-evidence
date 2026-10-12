@@ -11,6 +11,8 @@ import { WebSocketServer, type WebSocket } from 'ws'
 import { createServer as createHttpServer, type Server as HttpServer } from 'node:http'
 import { createServer as createHttpsServer, type Server as HttpsServer } from 'node:https'
 import { randomUUID } from 'node:crypto'
+import { ActorSchema, BIO_ERROR_MESSAGES, type Actor } from '@bio-evidence/research-core'
+import type { IncomingMessage } from 'node:http'
 import {
   PROTOCOL_VERSION,
   HEARTBEAT_INTERVAL_MS,
@@ -23,7 +25,7 @@ import {
   type PushTarget,
   type ErrorCode,
 } from '@craft-agent/shared/protocol'
-import type { RpcServer, HandlerFn, RequestContext } from './types'
+import type { RpcServer, HandlerFn, RequestContext, UserAuthProvider } from './types'
 import { serializeEnvelope, deserializeEnvelope } from './codec'
 import { createLogger } from '@craft-agent/shared/utils'
 
@@ -39,6 +41,7 @@ interface BufferedEvent {
 }
 
 interface ClientConnection {
+  actor?: Actor
   id: string
   ws: WebSocket
   workspaceId: string | null
@@ -77,6 +80,7 @@ export interface WsRpcTlsOptions {
 }
 
 export interface WsRpcServerOptions {
+  userAuth?: UserAuthProvider
   /** Host to bind to. Default: '127.0.0.1' */
   host?: string
   /** Port to bind to. 0 = random available port. Default: 0 */
@@ -145,6 +149,7 @@ export class WsRpcServer implements RpcServer {
   private readonly onClientConnected: WsRpcServerOptions['onClientConnected']
   private readonly onClientDisconnected: WsRpcServerOptions['onClientDisconnected']
   private readonly httpHandler: WsRpcServerOptions['httpHandler']
+  private readonly userAuth: UserAuthProvider | null
 
   constructor(opts?: WsRpcServerOptions) {
     this.host = opts?.host ?? '127.0.0.1'
@@ -159,6 +164,10 @@ export class WsRpcServer implements RpcServer {
     this.onClientConnected = opts?.onClientConnected
     this.onClientDisconnected = opts?.onClientDisconnected
     this.httpHandler = opts?.httpHandler
+    this.userAuth = opts?.userAuth ?? null
+    if (this.userAuth && !this.tlsOptions && !['localhost', '127.0.0.1', '::1'].includes(this.host)) {
+      throw new Error('TLS required for remote user authentication')
+    }
   }
 
   /** The actual port the server is listening on (available after listen()). */
@@ -203,13 +212,14 @@ export class WsRpcServer implements RpcServer {
 
   hasClientCapability(clientId: string, capability: string): boolean {
     const client = this.clients.get(clientId)
-    return !!client && client.capabilities.has(capability)
+    return !!client && (!this.userAuth || !!this.liveActor(client)) && client.capabilities.has(capability)
   }
 
   findClientsWithCapability(capability: string, opts?: { workspaceId?: string }): string[] {
     const results: string[] = []
     for (const [clientId, client] of this.clients) {
       if (!client.capabilities.has(capability)) continue
+      if (this.userAuth && !this.liveActor(client)) continue
       if (opts?.workspaceId !== undefined && client.workspaceId !== opts.workspaceId) continue
       results.push(clientId)
     }
@@ -226,6 +236,12 @@ export class WsRpcServer implements RpcServer {
         ;(err as any).code = 'CLIENT_DISCONNECTED'
         reject(err)
         return
+      }
+
+      if (this.userAuth && !this.liveActor(client)) {
+        const error = new Error('Authentication failed.')
+        ;(error as Error & { code: string }).code = 'AUTH_FAILED'
+        reject(error); return
       }
 
       // Check capability
@@ -263,6 +279,9 @@ export class WsRpcServer implements RpcServer {
 
   async listen(): Promise<void> {
     return new Promise((resolve, reject) => {
+      const userOptions = this.userAuth ? { maxPayload: 1024 * 1024, verifyClient: (info: { req: IncomingMessage }) => {
+        try { return this.userAuth!.allowsUpgrade(info.req) } catch { return false }
+      } } : {}
       if (this.tlsOptions) {
         // TLS mode: create HTTPS server, attach WebSocketServer to it.
         // When httpHandler is set, regular HTTP requests are served by it
@@ -278,7 +297,7 @@ export class WsRpcServer implements RpcServer {
           this.httpHandler,
         )
 
-        this.wss = new WebSocketServer({ server: this.httpsServer })
+        this.wss = new WebSocketServer({ server: this.httpsServer, ...userOptions })
 
         this.httpsServer.on('error', (err) => reject(err))
 
@@ -294,7 +313,7 @@ export class WsRpcServer implements RpcServer {
         // Plain WS + HTTP handler: create an HTTP server for both.
         this._protocol = 'ws'
         this.httpServer = createHttpServer(this.httpHandler)
-        this.wss = new WebSocketServer({ server: this.httpServer })
+        this.wss = new WebSocketServer({ server: this.httpServer, ...userOptions })
 
         this.httpServer.on('error', (err) => reject(err))
 
@@ -312,6 +331,7 @@ export class WsRpcServer implements RpcServer {
         this.wss = new WebSocketServer({
           host: this.host,
           port: this.requestedPort,
+          ...userOptions,
         })
 
         this.wss.on('listening', () => {
@@ -329,7 +349,7 @@ export class WsRpcServer implements RpcServer {
       }
 
       this.wss.on('connection', (ws, req) => {
-        this.onConnection(ws, req.headers.cookie ?? null)
+        this.onConnection(ws, req)
       })
     })
   }
@@ -368,7 +388,8 @@ export class WsRpcServer implements RpcServer {
   // Connection handling
   // -------------------------------------------------------------------------
 
-  private onConnection(ws: WebSocket, upgradeRequestCookie: string | null): void {
+  private onConnection(ws: WebSocket, upgradeRequest: IncomingMessage): void {
+    const upgradeRequestCookie = upgradeRequest.headers.cookie ?? null
     // Reject if at capacity
     if (this.maxClients > 0 && this.clients.size >= this.maxClients) {
       transportLog.warn('Connection rejected: at capacity', {
@@ -380,6 +401,7 @@ export class WsRpcServer implements RpcServer {
     }
 
     let handshakeCompleted = false
+    let handshakeStarted = false
     let handshakeTimeout: ReturnType<typeof setTimeout> | null = null
 
     // Give the client 5 seconds to send a handshake
@@ -399,12 +421,14 @@ export class WsRpcServer implements RpcServer {
       }
 
       if (!handshakeCompleted) {
+        if (handshakeStarted) { ws.close(4003, 'Handshake already in progress'); return }
         if (envelope.type !== 'handshake') {
           ws.close(4003, 'Expected handshake')
           return
         }
+        handshakeStarted = true
 
-        if (handshakeTimeout) {
+        if (handshakeTimeout && !this.userAuth) {
           clearTimeout(handshakeTimeout)
           handshakeTimeout = null
         }
@@ -427,7 +451,22 @@ export class WsRpcServer implements RpcServer {
         }
 
         // Auth check — bearer token OR session cookie (web UI)
-        if (this.requireAuth) {
+        let actor: Actor | undefined
+        if (this.userAuth) {
+          try {
+            if (envelope.token !== undefined && typeof envelope.token !== 'string') throw Error('Invalid credential')
+            const value = await this.userAuth.authenticate(upgradeRequest, envelope.token)
+            const parsed = ActorSchema.safeParse(value)
+            if (parsed.success && parsed.data.active) {
+              const live = this.userAuth.resolveActor(parsed.data.authSessionId)
+              if (live?.active && live.userId === parsed.data.userId) actor = Object.freeze({ ...live })
+            }
+          } catch { /* safe authentication failure */ }
+          if (!actor || ws.readyState !== ws.OPEN) {
+            this.sendError(ws, envelope.id, 'AUTH_FAILED', 'Authentication failed.')
+            ws.close(4005, 'Auth failed'); return
+          }
+        } else if (this.requireAuth) {
           let authenticated = false
 
           // 1. Try bearer token (standard path)
@@ -448,6 +487,8 @@ export class WsRpcServer implements RpcServer {
           }
         }
 
+        if (handshakeTimeout) { clearTimeout(handshakeTimeout); handshakeTimeout = null }
+
         // ── Reconnect attempt ──
         if (envelope.reconnectClientId && envelope.lastSeq != null) {
           const entry = this.disconnectedClients.get(envelope.reconnectClientId)
@@ -457,7 +498,8 @@ export class WsRpcServer implements RpcServer {
             // Identity must match (workspace + webContentsId)
             const identityMatch =
               prevClient.workspaceId === (envelope.workspaceId ?? null) &&
-              prevClient.webContentsId === (envelope.webContentsId ?? null)
+              prevClient.webContentsId === (envelope.webContentsId ?? null) &&
+              prevClient.actor?.userId === actor?.userId && prevClient.actor?.authSessionId === actor?.authSessionId
 
             if (identityMatch) {
               // Valid reconnect — prepare client state but do NOT add to
@@ -471,6 +513,7 @@ export class WsRpcServer implements RpcServer {
               prevClient.ws = ws
               prevClient.alive = true
               prevClient.missedPongs = 0
+              prevClient.actor = actor
               handshakeCompleted = true
 
               // Determine replay vs stale using the per-client delivery sequence.
@@ -501,6 +544,9 @@ export class WsRpcServer implements RpcServer {
 
                 // Replay missed events in order
                 for (const event of replayEvents) {
+                  if (this.userAuth && !this.liveActor(prevClient)) {
+                    ws.close(4005, 'Auth failed'); return
+                  }
                   this.safeSend(ws, event.data)
                 }
 
@@ -557,6 +603,7 @@ export class WsRpcServer implements RpcServer {
         // ── Normal fresh connect ──
         const clientId = randomUUID()
         const client: ClientConnection = {
+          actor,
           id: clientId,
           ws,
           workspaceId: envelope.workspaceId ?? null,
@@ -641,6 +688,10 @@ export class WsRpcServer implements RpcServer {
 
   private async onRequest(client: ClientConnection, envelope: MessageEnvelope): Promise<void> {
     const { channel, id, args } = envelope
+    const actor = this.liveActor(client)
+    if (this.userAuth && !actor) {
+      this.sendResponseError(client.ws, id, channel, 'AUTH_FAILED', 'Authentication failed.'); client.ws.close(4005, 'Auth failed'); return
+    }
 
     if (!channel) {
       this.sendResponseError(client.ws, id, undefined, 'CHANNEL_NOT_FOUND', 'Missing channel')
@@ -657,16 +708,21 @@ export class WsRpcServer implements RpcServer {
       clientId: client.id,
       workspaceId: client.workspaceId,
       webContentsId: client.webContentsId,
+      actor: actor ?? undefined,
     }
 
+    let timeout: ReturnType<typeof setTimeout> | undefined
     try {
       const result = await Promise.race([
         handler(ctx, ...(args ?? [])),
         new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error(`Handler timeout: ${channel} (${WsRpcServer.HANDLER_TIMEOUT_MS}ms)`)),
+          timeout = setTimeout(() => reject(new Error(`Handler timeout: ${channel} (${WsRpcServer.HANDLER_TIMEOUT_MS}ms)`)),
             WsRpcServer.HANDLER_TIMEOUT_MS),
         ),
       ])
+      if (this.userAuth && !this.liveActor(client)) {
+        this.sendResponseError(client.ws, id, channel, 'AUTH_FAILED', 'Authentication failed.'); client.ws.close(4005, 'Auth failed'); return
+      }
       const response: MessageEnvelope = {
         id,
         type: 'response',
@@ -675,11 +731,23 @@ export class WsRpcServer implements RpcServer {
       }
       this.safeSend(client.ws, serializeEnvelope(response))
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
+      const message = this.userAuth ? 'Request failed.' : err instanceof Error ? err.message : String(err)
       const rawCode = (err as { code?: unknown } | null)?.code
       const code: ErrorCode = isErrorCode(rawCode) ? rawCode : 'HANDLER_ERROR'
-      this.sendResponseError(client.ws, id, channel, code, message)
-    }
+      const safe = typeof rawCode === 'string' && Object.hasOwn(BIO_ERROR_MESSAGES, rawCode) ? BIO_ERROR_MESSAGES[rawCode as keyof typeof BIO_ERROR_MESSAGES] : message
+      this.sendResponseError(client.ws, id, channel, code, safe)
+    } finally { if (timeout) clearTimeout(timeout) }
+  }
+
+  private liveActor(client: ClientConnection): Actor | null {
+    if (!this.userAuth) return null
+    try {
+      if (!client.actor) return null
+      const current = this.userAuth.resolveActor(client.actor.authSessionId)
+      if (current?.active && current.userId === client.actor.userId) return Object.freeze({ ...current })
+    } catch { /* do not expose database errors */ }
+    client.eventBuffer.length = 0
+    return null
   }
 
   // -------------------------------------------------------------------------
@@ -751,6 +819,7 @@ export class WsRpcServer implements RpcServer {
     timestamp: number,
     shouldSend: boolean,
   ): void {
+    if (this.userAuth && !this.liveActor(client)) { client.ws.close(4005, 'Auth failed'); return }
     client.lastSentSeq += 1
     const seq = client.lastSentSeq
 

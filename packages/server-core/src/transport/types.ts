@@ -3,11 +3,21 @@
  */
 
 import type { PushTarget } from '@craft-agent/shared/protocol'
+import type { Actor } from '@bio-evidence/research-core'
+import type { IncomingMessage } from 'node:http'
+
+/** Trusted user-session provider; credentials and claims never come from RPC args. */
+export interface UserAuthProvider {
+  allowsUpgrade(request: IncomingMessage): boolean
+  authenticate(request: IncomingMessage, token?: string): Promise<Actor | null>
+  resolveActor(sessionId: string): Actor | null
+}
 
 export interface RequestContext {
   clientId: string
   workspaceId: string | null
   webContentsId: number | null
+  readonly actor?: Actor
 }
 
 export type HandlerFn = (ctx: RequestContext, ...args: any[]) => Promise<any> | any

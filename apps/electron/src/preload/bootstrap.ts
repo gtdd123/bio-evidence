@@ -122,7 +122,7 @@ if (isClientOnly) {
       autoReconnect: true,
       mode: 'remote',
       clientCapabilities: [...LOCAL_CLIENT_CAPABILITIES],
-      tlsRejectUnauthorized: false,
+      tlsRejectUnauthorized: true,
     })
     initialWorkspaceClient.connect()
   } else {
@@ -146,7 +146,7 @@ if (isClientOnly) {
       autoReconnect: true,
       mode: 'remote',
       clientCapabilities: [...LOCAL_CLIENT_CAPABILITIES],
-      tlsRejectUnauthorized: false,
+      tlsRejectUnauthorized: true,
     })
   })
 

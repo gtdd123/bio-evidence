@@ -11,7 +11,7 @@ import {
   mergeSessionPolicy, transitionRun, RunStateSchema,
   type Actor, type ResearchScope, type ResearchEntity, type ResearchEntityKind,
   type ResearchRepository, type AuthorityUser, type JsonValue, type ProjectionEntry, type ResearchRun, type RunState,
-  type EvidenceRevision, type ReportRevision,
+  type EvidenceRevision, type ReportRevision, type AuthorityAuthSession,
 } from '@bio-evidence/research-core';
 import { resolveConfigDir, validateNamespacePath } from '@craft-agent/shared/config/namespace';
 import { INITIAL_SCHEMA, SCHEMA_VERSION } from './schema.ts';
@@ -153,6 +153,94 @@ export class SqliteResearchRepository implements ResearchRepository {
     const user = this.query<UserRow, [string]>('SELECT * FROM users WHERE username=?').get(username);
     return user ? { id: user.id, username: user.username, passwordHash: user.password_hash, active: user.active === 1,
       administrator: user.administrator === 1, revision: user.revision } : null;
+  }
+  createAuthorityAccount(actor: Actor | null, input: AuthorityUser): void {
+    const user = parseContract(UserSchema, input);
+    const insert = () => this.seedUser(user);
+    if (actor) {
+      this.tx(actor, null, 'account-create', user.id, current => {
+        if (!current.administrator) throw new ResearchError('BIO_ACCESS_DENIED');
+        insert();
+      });
+    } else {
+      // This is a local bootstrap capability, never an HTTP signup route.
+      try {
+        this.db.transaction(() => {
+          this.assertWriter();
+          if (!user.administrator || this.query<{ count: number }, []>('SELECT count(*) AS count FROM users').get()!.count !== 0) {
+            throw new ResearchError('BIO_ACCESS_DENIED');
+          }
+          insert(); this.audit(user.id, null, 'account-bootstrap', 'success', user.id);
+        }).immediate();
+      } catch (error) {
+        this.audit('bootstrap', null, 'account-bootstrap', error instanceof ResearchError ? 'denied' : 'failed', user.id);
+        if (error instanceof ResearchError) throw error; throw new ResearchError('BIO_STORAGE_UNAVAILABLE');
+      }
+    }
+  }
+  issueAuthSession(input: AuthorityAuthSession, expectedUserRevision: number): void {
+    const session = parseContract(z.strictObject({ id: IdSchema, userId: IdSchema, tokenHash: z.string().regex(/^[a-f0-9]{64}$/),
+      expiresAt: GenerationSchema }), input);
+    parseContract(GenerationSchema, expectedUserRevision);
+    try {
+      this.db.transaction(() => {
+        this.assertWriter();
+        const user = this.query<{ active: number; revision: number }, [string]>('SELECT active,revision FROM users WHERE id=?').get(session.userId);
+        if (!user?.active || user.revision !== expectedUserRevision) throw new ResearchError('BIO_ACCESS_DENIED');
+        this.query('INSERT INTO auth_sessions(id,user_id,token_hash,expires_at) VALUES(?,?,?,?)')
+          .run(session.id, session.userId, session.tokenHash, session.expiresAt);
+        this.audit(session.userId, null, 'login', 'success', session.id);
+      }).immediate();
+    } catch (error) {
+      this.audit(session.userId, null, 'login', error instanceof ResearchError ? 'denied' : 'failed', session.id);
+      if (error instanceof ResearchError) throw error; throw new ResearchError('BIO_STORAGE_UNAVAILABLE');
+    }
+  }
+  private authenticatedActor(key: 'id' | 'token_hash', value: string, now: number): Actor | null {
+    const row = this.query<{ id: string; user_id: string; administrator: number }, [string, number]>(
+      `SELECT a.id,a.user_id,u.administrator FROM auth_sessions a JOIN users u ON u.id=a.user_id
+       WHERE a.${key}=? AND a.revoked=0 AND a.expires_at>? AND u.active=1`,
+    ).get(value, now);
+    return row ? Object.freeze({ userId: row.user_id, authSessionId: row.id, active: true, administrator: row.administrator === 1 }) : null;
+  }
+  findAuthenticatedActor(tokenHash: string, now: number): Actor | null {
+    if (!/^[a-f0-9]{64}$/.test(tokenHash)) return null;
+    return this.authenticatedActor('token_hash', tokenHash, parseContract(GenerationSchema, now));
+  }
+  resolveAuthenticatedActor(sessionId: string, now: number): Actor | null {
+    if (!IdSchema.safeParse(sessionId).success) return null;
+    return this.authenticatedActor('id', sessionId, parseContract(GenerationSchema, now));
+  }
+  revokeAuthSession(actor: Actor): void {
+    this.tx(actor, null, 'logout', actor.authSessionId, current => {
+      const result = this.query('UPDATE auth_sessions SET revoked=1 WHERE id=? AND user_id=?')
+        .run(current.authSessionId, current.userId);
+      if (result.changes !== 1) throw new ResearchError('BIO_ACCESS_DENIED');
+    });
+  }
+  setAccountActive(actor: Actor, userId: string, active: boolean, expectedRevision: number): void {
+    parseContract(IdSchema, userId); parseContract(z.boolean(), active); parseContract(GenerationSchema, expectedRevision);
+    this.tx(actor, null, 'account-status', userId, current => {
+      if (!current.administrator) throw new ResearchError('BIO_ACCESS_DENIED');
+      const user = this.query<{ administrator: number; active: number; revision: number }, [string]>(
+        'SELECT administrator,active,revision FROM users WHERE id=?',
+      ).get(userId);
+      if (!user || user.revision !== expectedRevision) throw new ResearchError('BIO_REVISION_CONFLICT');
+      if (!active && user.active && user.administrator && this.query<{ count: number }, []>(
+        'SELECT count(*) AS count FROM users WHERE active=1 AND administrator=1',
+      ).get()!.count <= 1) throw new ResearchError('BIO_ACCESS_DENIED');
+      this.query('UPDATE users SET active=?,revision=revision+1 WHERE id=? AND revision=?').run(Number(active), userId, expectedRevision);
+      if (!active) this.query('UPDATE auth_sessions SET revoked=1 WHERE user_id=?').run(userId);
+    });
+  }
+  currentAccount(actor: Actor) {
+    const current = this.currentActor(actor);
+    const user = this.query<{ id: string; username: string }, [string]>('SELECT id,username FROM users WHERE id=?').get(current.userId)!;
+    return { id: user.id, username: user.username, administrator: current.administrator };
+  }
+  recordAuthFailure(action: 'login' | 'account-create' | 'account-status' = 'login', actorId = 'authentication'): void {
+    this.assertWriter(); parseContract(z.enum(['login', 'account-create', 'account-status']), action); parseContract(IdSchema, actorId);
+    this.audit(actorId, null, action, 'denied', null);
   }
   createProject(actor: Actor, idInput: string, nameInput: string) {
     const id = parseContract(IdSchema, idInput);

@@ -27,7 +27,7 @@
 
 import '../../../scripts/bio-runtime-guard.mjs'
 import { join } from 'node:path'
-import { resolveConfigDir } from '@craft-agent/shared/config/namespace'
+import { resolveConfigDir, isBioEvidenceMode } from '@craft-agent/shared/config/namespace'
 import { readFileSync, existsSync } from 'node:fs'
 import { version as packageVersion } from '../package.json'
 import { enableDebug } from '@craft-agent/shared/utils/debug'
@@ -37,6 +37,8 @@ import type { WebuiHandler } from '@craft-agent/server-core/webui'
 import { getCredentialManager } from '@craft-agent/shared/credentials'
 import { getWorkspaces } from '@craft-agent/shared/config'
 import { createMessagingBootstrap, type MessagingBootstrapHandle } from '@craft-agent/messaging-gateway'
+
+if (isBioEvidenceMode()) throw new Error('BioEvidence requires the user-account authority. Use the bio:server entry.')
 
 // --generate-token: print a crypto-random token and exit
 if (process.argv.includes('--generate-token')) {

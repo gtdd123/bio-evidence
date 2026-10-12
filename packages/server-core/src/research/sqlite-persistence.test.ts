@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { Database } from 'bun:sqlite';
 import { resolveConfigDir, buildNamespaceEnv } from '@craft-agent/shared/config/namespace';
 import { SqliteResearchRepository } from './sqlite-repository.ts';
+import { BioAuthService } from './auth-service.ts';
 
 const actor = { userId: 'alice', authSessionId: 'auth-a', active: true, administrator: false };
 const scope = { kind: 'personal', ownerId: 'alice' };
@@ -39,6 +40,17 @@ describe('SQLite persistence and service authority', () => {
     expect(repo.readProjection(actor, 'research-a')[0]?.messages).toEqual(messages);
     expect(repo.getUserForAuth('alice')?.active).toBe(true);
     expect(readdirSync(root).some(name => name.startsWith('metadata.sqlite.backup-v0-'))).toBe(true);
+  });
+  test('user login survives restart and its logout revocation stays persisted', async () => {
+    repo = new SqliteResearchRepository(filename);
+    let auth = await BioAuthService.create(repo);
+    const account = await auth.createAccount(null, 'persist-admin', 'Synthetic-passphrase-9!', true);
+    const login = await auth.login('persist-admin', 'Synthetic-passphrase-9!');
+    repo.close(); repo = new SqliteResearchRepository(filename); auth = await BioAuthService.create(repo);
+    expect(auth.authenticate(login.token)?.userId).toBe(account.id);
+    auth.logout(auth.authenticate(login.token)!);
+    repo.close(); repo = new SqliteResearchRepository(filename); auth = await BioAuthService.create(repo);
+    expect(auth.authenticate(login.token)).toBeNull();
   });
   test('live second writer is refused including a directory junction alias', () => {
     initialize();

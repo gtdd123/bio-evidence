@@ -20,6 +20,19 @@ import {
 import type { RpcClient } from './types'
 import { serializeEnvelope, deserializeEnvelope } from './codec'
 
+/** Shared by preload, remote workspaces, connection tests and the Web client. */
+export function validateUserSessionWsUrl(value: string): void {
+  let url: URL
+  try {
+    if (value.length > 2048 || value.trim() !== value || /[\x00-\x1f\x7f]/.test(value)) throw Error('Invalid URL')
+    url = new URL(value)
+  } catch { throw new Error('A valid secure service URL is required.') }
+  if (!['ws:', 'wss:'].includes(url.protocol) || url.username || url.password || url.search || url.hash ||
+    url.protocol === 'ws:' && !['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)) {
+    throw new Error('Remote user sessions require WSS without URL credentials.')
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Pending request state
 // ---------------------------------------------------------------------------
@@ -149,6 +162,8 @@ export class WsRpcClient implements RpcClient {
   private readonly tlsRejectUnauthorized: boolean
 
   constructor(url: string, opts?: WsRpcClientOptions) {
+    validateUserSessionWsUrl(url)
+    if (opts?.tlsRejectUnauthorized === false) throw new Error('Certificate verification is required for user sessions.')
     this.url = url
     this.workspaceId = opts?.workspaceId
     this.webContentsId = opts?.webContentsId
