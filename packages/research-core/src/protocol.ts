@@ -2,10 +2,14 @@ import { z } from 'zod';
 import { IdSchema, IdListSchema, ScopeSchema, RevisionSchema, GenerationSchema, CitationSchema,
   parseContract, ResearchError, type ResearchScope, type ResearchSession, type ReadingSnapshot,
   type EvidenceRevision, type ReportRevision, type ResearchRun, type ResearchSource } from './contracts.ts';
+import type { ResearchSpaceView, ResearchMemberView, ResearchAuditEntry } from './repository.ts';
 import { ReportClaimSchema, ReportTitleSchema, nonBlankText } from './contracts.ts';
 
 export const RESEARCH_PROTOCOL_VERSION = 1 as const;
 export const RESEARCH_CHANNELS = {
+  LIST_SPACES: 'research:v1:listSpaces', CREATE_PROJECT: 'research:v1:createProject',
+  LIST_MEMBERS: 'research:v1:listMembers', INVITE_MEMBER: 'research:v1:inviteMember', SET_MEMBER: 'research:v1:setMember',
+  READ_AUDIT: 'research:v1:readAudit',
   CREATE_SESSION: 'research:v1:createSession', GET_SESSION: 'research:v1:getSession',
   LIST_SESSIONS: 'research:v1:listSessions', SEARCH: 'research:v1:search',
   GET_SNAPSHOT: 'research:v1:getSnapshot', SAVE_EVIDENCE: 'research:v1:saveEvidence',
@@ -15,6 +19,14 @@ export const RESEARCH_CHANNELS = {
 } as const;
 export const CreateSessionSchema = z.strictObject({ scope: ScopeSchema, name: z.string().trim().min(1).max(300), sourceIds: IdListSchema.default([]) });
 export const ResearchRequestSchemas = {
+  [RESEARCH_CHANNELS.LIST_SPACES]: z.strictObject({}),
+  [RESEARCH_CHANNELS.READ_AUDIT]: z.strictObject({ scope: ScopeSchema, pageSize: z.number().int().min(1).max(200).default(100), afterSequence: GenerationSchema.default(0) }),
+  [RESEARCH_CHANNELS.CREATE_PROJECT]: z.strictObject({ name: z.string().trim().min(1).max(300) }),
+  [RESEARCH_CHANNELS.LIST_MEMBERS]: z.strictObject({ projectId: IdSchema }),
+  [RESEARCH_CHANNELS.INVITE_MEMBER]: z.strictObject({ projectId: IdSchema, username: z.string().regex(/^[a-z0-9][a-z0-9._-]{2,63}$/),
+    role: z.enum(['owner', 'editor', 'viewer']), expectedRevision: RevisionSchema }),
+  [RESEARCH_CHANNELS.SET_MEMBER]: z.strictObject({ projectId: IdSchema, userId: IdSchema,
+    role: z.enum(['owner', 'editor', 'viewer']), active: z.boolean(), expectedRevision: RevisionSchema }),
   [RESEARCH_CHANNELS.CREATE_SESSION]: CreateSessionSchema,
   [RESEARCH_CHANNELS.GET_SESSION]: z.strictObject({ sessionId: IdSchema }),
   [RESEARCH_CHANNELS.LIST_SESSIONS]: z.strictObject({ scope: ScopeSchema, cursor: IdSchema.optional(), pageSize: z.number().int().min(1).max(200).default(50) }),
@@ -38,6 +50,12 @@ export function parseResearchRequest(channel: string, input: unknown): unknown {
 }
 // Extends the existing typed RPC transport; handlers are registered only after auth integration.
 export interface ResearchRpcChannelMap {
+  'research:v1:listSpaces': { args: [ResearchRequest<'research:v1:listSpaces'>]; result: ResearchSpaceView[] };
+  'research:v1:readAudit': { args: [ResearchRequest<'research:v1:readAudit'>]; result: ResearchAuditEntry[] };
+  'research:v1:createProject': { args: [ResearchRequest<'research:v1:createProject'>]; result: { id: string; name: string; revision: number } };
+  'research:v1:listMembers': { args: [ResearchRequest<'research:v1:listMembers'>]; result: ResearchMemberView[] };
+  'research:v1:inviteMember': { args: [ResearchRequest<'research:v1:inviteMember'>]; result: { revision: number } };
+  'research:v1:setMember': { args: [ResearchRequest<'research:v1:setMember'>]; result: { revision: number } };
   'research:v1:createSession': { args: [ResearchRequest<'research:v1:createSession'>]; result: ResearchSession };
   'research:v1:getSession': { args: [ResearchRequest<'research:v1:getSession'>]; result: ResearchSession };
   'research:v1:listSessions': { args: [ResearchRequest<'research:v1:listSessions'>]; result: { items: ResearchSession[]; nextCursor?: string } };

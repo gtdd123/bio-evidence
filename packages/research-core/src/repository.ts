@@ -4,6 +4,10 @@ export type ResearchEntity = ResearchSource | ReadingSnapshot | EvidenceRevision
 export interface AuthorityUser { id: string; username: string; passwordHash: string; active: boolean; administrator: boolean; revision: number }
 export interface AuthorityAuthSession { id: string; userId: string; tokenHash: string; expiresAt: number }
 export interface PublicAccount { id: string; username: string; administrator: boolean }
+export interface ResearchSpaceView { scope: ResearchScope; name: string; role: 'owner' | 'editor' | 'viewer'; revision: number }
+export interface ResearchMemberView { userId: string; username: string; role: 'owner' | 'editor' | 'viewer'; active: boolean }
+export interface ResourceAuthority { scope: ResearchScope; id: string; ownerId?: string; sessionId?: string }
+export interface ResearchAuditEntry { sequence: number; actorId: string; createdAt: number; action: string; outcome: string; resourceId: string | null }
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 export interface ProjectionEntry { sequence: number; sessionId: string; operationId: string; generation: number; hash: string; messages: JsonValue[]; projected: boolean;
   format: 'legacy-runtime' | 'stored-snapshot'; header?: { [key: string]: JsonValue } }
@@ -18,6 +22,12 @@ export interface ResearchRepository {
   setAccountActive(actor: Actor, userId: string, active: boolean, expectedRevision: number): void;
   currentAccount(actor: Actor): PublicAccount;
   recordAuthFailure(action?: 'login' | 'account-create' | 'account-status', actorId?: string): void;
+  listSpaces(actor: Actor): ResearchSpaceView[];
+  listMembers(actor: Actor, projectId: string): ResearchMemberView[];
+  inviteMember(actor: Actor, projectId: string, username: string, role: 'owner' | 'editor' | 'viewer', expectedRevision: number): { revision: number };
+  authorizeScope(actor: Actor, scope: ResearchScope, action: 'read' | 'write' | 'manage'): void;
+  authorizeResource(actor: Actor, kind: ResearchEntityKind, id: string, action: 'read' | 'write' | 'execute' | 'cancel'): ResourceAuthority;
+  listSessions(actor: Actor, scope: ResearchScope, pageSize: number, cursor?: string): { items: ResearchSession[]; nextCursor?: string };
   createProject(actor: Actor, id: string, name: string): { id: string; name: string; revision: number };
   setMember(actor: Actor, projectId: string, userId: string, role: 'owner' | 'editor' | 'viewer', active: boolean, expectedRevision: number): { revision: number };
   put(actor: Actor, kind: ResearchEntityKind, input: unknown, expectedRevision?: number): ResearchEntity;
@@ -28,7 +38,8 @@ export interface ResearchRepository {
   appendProjectionSnapshot(actor: Actor, sessionId: string, operationId: string, header: { [key: string]: JsonValue }, messages: JsonValue[], generation: number): number;
   markProjected(actor: Actor, sessionId: string, operationId: string, generation: number, hash: string): void;
   readProjection(actor: Actor, sessionId: string, forWrite?: boolean): ProjectionEntry[];
-  readAudit(actor: Actor, scope: ResearchScope): Array<{ action: string; outcome: string; resourceId: string | null }>;
+  readAudit(actor: Actor, scope: ResearchScope, pageSize?: number, afterSequence?: number): ResearchAuditEntry[];
+  readAuditEntries(actor: Actor, scope: ResearchScope, sequences: number[]): ResearchAuditEntry[];
   close(): void;
 }
 export interface ResearchServiceContext { readonly repository: ResearchRepository }

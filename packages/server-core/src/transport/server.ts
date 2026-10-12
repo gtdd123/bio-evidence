@@ -25,7 +25,7 @@ import {
   type PushTarget,
   type ErrorCode,
 } from '@craft-agent/shared/protocol'
-import type { RpcServer, HandlerFn, RequestContext, UserAuthProvider } from './types'
+import type { RpcServer, HandlerFn, RequestContext, UserAuthProvider, TransportAuthorizationGate } from './types'
 import { serializeEnvelope, deserializeEnvelope } from './codec'
 import { createLogger } from '@craft-agent/shared/utils'
 
@@ -38,10 +38,13 @@ interface BufferedEvent {
   /** Shared serialized envelope — one allocation referenced by all client buffers. */
   data: string
   timestamp: number
+  channel?: string
+  args?: unknown[]
 }
 
 interface ClientConnection {
   actor?: Actor
+  authorizationInvalidated?: boolean
   id: string
   ws: WebSocket
   workspaceId: string | null
@@ -150,6 +153,7 @@ export class WsRpcServer implements RpcServer {
   private readonly onClientDisconnected: WsRpcServerOptions['onClientDisconnected']
   private readonly httpHandler: WsRpcServerOptions['httpHandler']
   private readonly userAuth: UserAuthProvider | null
+  private authorizationGate: TransportAuthorizationGate | null = null
 
   constructor(opts?: WsRpcServerOptions) {
     this.host = opts?.host ?? '127.0.0.1'
@@ -190,10 +194,21 @@ export class WsRpcServer implements RpcServer {
   // -------------------------------------------------------------------------
 
   handle(channel: string, handler: HandlerFn): void {
+    if (this.authorizationGate && !this.authorizationGate.allowsChannel(channel)) throw new Error('Channel disabled by the research profile')
     if (this.handlers.has(channel)) {
       throw new Error(`Handler already registered for channel: ${channel}`)
     }
     this.handlers.set(channel, handler)
+  }
+  setAuthorizationGate(gate: TransportAuthorizationGate): void {
+    if (!this.userAuth) throw new Error('Research authorization requires user authentication')
+    if (this.authorizationGate) throw new Error('Authorization profile already installed')
+    this.authorizationGate = gate
+    for (const channel of this.handlers.keys()) if (!gate.allowsChannel(channel)) this.handlers.delete(channel)
+  }
+  refreshAuthorization(): void {
+    for (const client of this.clients.values()) this.revalidateBuffer(client)
+    for (const { client } of this.disconnectedClients.values()) this.revalidateBuffer(client)
   }
 
   push(channel: string, target: PushTarget, ...args: any[]): void {
@@ -241,6 +256,13 @@ export class WsRpcServer implements RpcServer {
       if (this.userAuth && !this.liveActor(client)) {
         const error = new Error('Authentication failed.')
         ;(error as Error & { code: string }).code = 'AUTH_FAILED'
+        reject(error); return
+      }
+      // Browser/OS bridge capabilities are disabled in the research profile.
+      // A future supported capability needs an explicit actor/window binding.
+      if (this.authorizationGate) {
+        const error = new Error('Research access denied.')
+        ;(error as Error & { code: string }).code = 'BIO_ACCESS_DENIED'
         reject(error); return
       }
 
@@ -529,7 +551,10 @@ export class WsRpcServer implements RpcServer {
                 : firstBufferedSeq != null && lastSeq >= firstBufferedSeq - 1
 
               if (canReplay) {
-                const replayEvents = prevClient.eventBuffer.filter(e => e.seq > lastSeq)
+                const before = prevClient.eventBuffer.length
+                this.revalidateBuffer(prevClient)
+                const permissionsChanged = !!prevClient.authorizationInvalidated || prevClient.eventBuffer.length !== before
+                const replayEvents = permissionsChanged ? [] : prevClient.eventBuffer.filter(e => e.seq > lastSeq)
 
                 const ack: MessageEnvelope = {
                   id: envelope.id,
@@ -539,6 +564,7 @@ export class WsRpcServer implements RpcServer {
                   clientId: prevClient.id,
                   registeredChannels: [...this.handlers.keys()],
                   reconnected: true,
+                  ...(permissionsChanged ? { stale: true } : {}),
                 }
                 this.safeSend(ws, serializeEnvelope(ack))
 
@@ -546,6 +572,9 @@ export class WsRpcServer implements RpcServer {
                 for (const event of replayEvents) {
                   if (this.userAuth && !this.liveActor(prevClient)) {
                     ws.close(4005, 'Auth failed'); return
+                  }
+                  if (this.authorizationGate && (!event.channel || !event.args || !this.eventAllowed(prevClient, event.channel, event.args))) {
+                    prevClient.eventBuffer.length = 0; ws.close(4009, 'Access changed'); return
                   }
                   this.safeSend(ws, event.data)
                 }
@@ -713,6 +742,7 @@ export class WsRpcServer implements RpcServer {
 
     let timeout: ReturnType<typeof setTimeout> | undefined
     try {
+      this.authorizationGate?.authorizeRequest(actor!, channel, args ?? [])
       const result = await Promise.race([
         handler(ctx, ...(args ?? [])),
         new Promise<never>((_, reject) =>
@@ -720,8 +750,13 @@ export class WsRpcServer implements RpcServer {
             WsRpcServer.HANDLER_TIMEOUT_MS),
         ),
       ])
-      if (this.userAuth && !this.liveActor(client)) {
+      const responseActor = this.liveActor(client)
+      if (this.userAuth && !responseActor) {
         this.sendResponseError(client.ws, id, channel, 'AUTH_FAILED', 'Authentication failed.'); client.ws.close(4005, 'Auth failed'); return
+      }
+      if (this.authorizationGate) {
+        this.authorizationGate.authorizeResponse(responseActor!, channel, args ?? [], result)
+        this.revalidateBuffer(client)
       }
       const response: MessageEnvelope = {
         id,
@@ -748,6 +783,17 @@ export class WsRpcServer implements RpcServer {
     } catch { /* do not expose database errors */ }
     client.eventBuffer.length = 0
     return null
+  }
+  private eventAllowed(client: ClientConnection, channel: string, args: unknown[]): boolean {
+    if (!this.authorizationGate) return true
+    const actor = this.liveActor(client)
+    try { return !!actor && this.authorizationGate.allowsEvent(actor, channel, args) } catch { return false }
+  }
+  private revalidateBuffer(client: ClientConnection): void {
+    if (!this.authorizationGate) return
+    const previousCount = client.eventBuffer.length
+    client.eventBuffer = client.eventBuffer.filter(event => !!event.channel && !!event.args && this.eventAllowed(client, event.channel, event.args))
+    if (client.eventBuffer.length !== previousCount) client.authorizationInvalidated = true
   }
 
   // -------------------------------------------------------------------------
@@ -820,6 +866,7 @@ export class WsRpcServer implements RpcServer {
     shouldSend: boolean,
   ): void {
     if (this.userAuth && !this.liveActor(client)) { client.ws.close(4005, 'Auth failed'); return }
+    if (!this.eventAllowed(client, channel, args)) { this.revalidateBuffer(client); return }
     client.lastSentSeq += 1
     const seq = client.lastSentSeq
 
@@ -833,7 +880,9 @@ export class WsRpcServer implements RpcServer {
     }
 
     const data = serializeEnvelope(envelope)
-    client.eventBuffer.push({ seq, data, timestamp })
+    client.eventBuffer.push({ seq, data, timestamp, ...(this.authorizationGate ? {
+      channel, args: deserializeEnvelope(data).args ?? [],
+    } : {}) })
     this.evictBuffer(client)
 
     if (shouldSend) {

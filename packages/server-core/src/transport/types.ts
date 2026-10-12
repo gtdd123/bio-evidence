@@ -12,6 +12,12 @@ export interface UserAuthProvider {
   authenticate(request: IncomingMessage, token?: string): Promise<Actor | null>
   resolveActor(sessionId: string): Actor | null
 }
+export interface TransportAuthorizationGate {
+  allowsChannel(channel: string): boolean
+  authorizeRequest(actor: Actor, channel: string, args: unknown[]): void
+  authorizeResponse(actor: Actor, channel: string, args: unknown[], result: unknown): void
+  allowsEvent(actor: Actor, channel: string, args: unknown[]): boolean
+}
 
 export interface RequestContext {
   clientId: string

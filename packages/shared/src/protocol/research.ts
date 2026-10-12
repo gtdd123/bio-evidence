@@ -7,5 +7,6 @@ export type {
   Actor, ResearchScope, DataPolicy, ResearchSession, ResearchSource, ReadingSnapshot, TextBlock,
   EvidenceRevision, ReportRevision, Citation, ResearchRun, RunState, ResearchEvent,
   ArticleLicense, RunLease,
+  ResearchSpaceView, ResearchMemberView, ResearchAuditEntry,
   ResearchRequestChannel, ResearchRequest, ResearchRpcChannelMap, BioErrorCode,
 } from '@bio-evidence/research-core';

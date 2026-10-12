@@ -242,6 +242,86 @@ export class SqliteResearchRepository implements ResearchRepository {
     this.assertWriter(); parseContract(z.enum(['login', 'account-create', 'account-status']), action); parseContract(IdSchema, actorId);
     this.audit(actorId, null, action, 'denied', null);
   }
+  authorizeScope(actor: Actor, input: ResearchScope, action: 'read' | 'write' | 'manage'): void {
+    const scope = parseContract(ScopeSchema, input);
+    parseContract(z.enum(['read', 'write', 'manage']), action);
+    this.tx(actor, scope, `scope-${action}`, null, current => this.authorize(current, scope, action));
+  }
+  authorizeResource(actor: Actor, kindInput: ResearchEntityKind, idInput: string, action: 'read' | 'write' | 'execute' | 'cancel') {
+    const kind = parseContract(KindSchema, kindInput), requestedId = parseContract(IdSchema, idInput);
+    parseContract(z.enum(['read', 'write', 'execute', 'cancel']), action);
+    const head = kind === 'evidence' || kind === 'report' ? this.query<{ record_id: string }, [string, string]>(
+      'SELECT record_id FROM heads WHERE kind=? AND entity_id=?',
+    ).get(kind, requestedId) : null;
+    const id = head?.record_id ?? requestedId;
+    let scope: ResearchScope;
+    try { scope = this.binding(kind, id) } catch {
+      // No known binding means no owner audit scope. Do not place a guessed
+      // private identifier into the global account/service audit.
+      return this.tx(actor, null, `resource-${action}`, null, () => { throw new ResearchError('BIO_ACCESS_DENIED') });
+    }
+    return this.tx(actor, scope, `resource-${action}`, requestedId, current => {
+      this.authorize(current, scope, action === 'read' || action === 'cancel' ? 'read' : 'write');
+      // Resolve only authority metadata before reading any payload body.
+      const metadata = this.query<{ owner_id: string | null; session_id: string | null }, [string, string]>(
+        "SELECT json_extract(payload,'$.ownerId') AS owner_id,json_extract(payload,'$.sessionId') AS session_id FROM entities WHERE kind=? AND id=?",
+      ).get(kind, id);
+      if (!metadata) throw new ResearchError('BIO_ACCESS_DENIED');
+      let ownerId = metadata.owner_id ?? undefined, sessionId = metadata.session_id ?? undefined;
+      if (kind === 'run') {
+        if (!sessionId || !sameScope(this.binding('session', sessionId), scope)) throw new ResearchError('BIO_ACCESS_DENIED');
+        const session = this.query<{ owner_id: string }, [string]>(
+          "SELECT json_extract(payload,'$.ownerId') AS owner_id FROM entities WHERE kind='session' AND id=?",
+        ).get(sessionId);
+        ownerId = session?.owner_id;
+      }
+      if (action === 'execute' || action === 'cancel') {
+        if (!['session', 'run'].includes(kind) || ownerId !== current.userId) throw new ResearchError('BIO_ACCESS_DENIED');
+      }
+      return { id, scope, ...(ownerId ? { ownerId } : {}), ...(sessionId ? { sessionId } : {}) };
+    });
+  }
+  listSpaces(actor: Actor) {
+    return this.tx(actor, null, 'spaces-list', null, current => {
+      const projects = this.query<{ id: string; name: string; revision: number; role: 'owner' | 'editor' | 'viewer' }, [string]>(
+        'SELECT p.id,p.name,p.revision,m.role FROM projects p JOIN members m ON p.id=m.project_id WHERE m.user_id=? AND m.active=1 ORDER BY p.id',
+      ).all(current.userId);
+      return [{ scope: { kind: 'personal' as const, ownerId: current.userId }, name: 'Personal', role: 'owner' as const, revision: 1 },
+        ...projects.map(project => ({ scope: { kind: 'project' as const, projectId: project.id }, name: project.name, role: project.role, revision: project.revision }))];
+    });
+  }
+  listMembers(actor: Actor, projectId: string) {
+    parseContract(IdSchema, projectId);
+    const scope: ResearchScope = { kind: 'project', projectId };
+    return this.tx(actor, scope, 'members-list', projectId, current => {
+      this.authorize(current, scope, 'read');
+      return this.query<{ user_id: string; username: string; role: 'owner' | 'editor' | 'viewer'; active: number }, [string]>(
+        'SELECT m.user_id,u.username,m.role,m.active FROM members m JOIN users u ON m.user_id=u.id WHERE m.project_id=? ORDER BY m.user_id',
+      ).all(projectId).map(member => ({ userId: member.user_id, username: member.username, role: member.role, active: member.active === 1 }));
+    });
+  }
+  inviteMember(actor: Actor, projectId: string, username: string, role: 'owner' | 'editor' | 'viewer', expectedRevision: number) {
+    parseContract(IdSchema, projectId); parseContract(z.string().regex(/^[a-z0-9][a-z0-9._-]{2,63}$/), username);
+    const scope: ResearchScope = { kind: 'project', projectId };
+    return this.tx(actor, scope, 'member-invite', projectId, current => {
+      this.authorize(current, scope, 'manage');
+      const target = this.query<{ id: string }, [string]>('SELECT id FROM users WHERE username=? AND active=1').get(username);
+      if (!target) throw new ResearchError('BIO_ACCESS_DENIED');
+      return this.setMember(current, projectId, target.id, role, true, expectedRevision);
+    });
+  }
+  listSessions(actor: Actor, input: ResearchScope, pageSize: number, cursor?: string) {
+    const scope = parseContract(ScopeSchema, input);
+    parseContract(z.number().int().min(1).max(200), pageSize); if (cursor) parseContract(IdSchema, cursor);
+    return this.tx(actor, scope, 'sessions-list', null, current => {
+      this.authorize(current, scope, 'read');
+      const rows = this.query<{ id: string }, [string, string, number]>(
+        "SELECT id FROM bindings WHERE kind='session' AND scope_key=? AND id>? ORDER BY id LIMIT ?",
+      ).all(scopeKey(scope), cursor ?? '', pageSize + 1);
+      const items = rows.slice(0, pageSize).map(row => parseContract(SessionSchema, this.get(current, 'session', row.id)));
+      return { items, ...(rows.length > pageSize ? { nextCursor: items.at(-1)!.id } : {}) };
+    });
+  }
   createProject(actor: Actor, idInput: string, nameInput: string) {
     const id = parseContract(IdSchema, idInput);
     const name = parseContract(z.string().min(1).max(300), nameInput);
@@ -511,11 +591,23 @@ export class SqliteResearchRepository implements ResearchRepository {
           { format: 'stored-snapshot' as const, header: payload.header, messages: payload.messages }) };
     });
   }
-  readAudit(actor: Actor, scope: ResearchScope) {
+  readAudit(actor: Actor, input: ResearchScope, pageSize = 100, afterSequence = 0) {
+    const scope = parseContract(ScopeSchema, input);
+    parseContract(z.number().int().min(1).max(200), pageSize); parseContract(GenerationSchema, afterSequence);
     this.authorize(actor, scope, scope.kind === 'project' ? 'manage' : 'read');
-    return this.query<{ action: string; outcome: string; resource_id: string | null }, [string]>(
-      'SELECT action,outcome,resource_id FROM audit WHERE scope_key=? ORDER BY id',
-    ).all(scopeKey(scope)).map(row => ({ action: row.action, outcome: row.outcome, resourceId: row.resource_id }));
+    return this.query<{ id: number; actor_id: string; created_at: number; action: string; outcome: string; resource_id: string | null }, [string, number, number]>(
+      'SELECT id,actor_id,created_at,action,outcome,resource_id FROM audit WHERE scope_key=? AND id>? ORDER BY id LIMIT ?',
+    ).all(scopeKey(scope), afterSequence, pageSize).map(row => ({ sequence: row.id, actorId: row.actor_id, createdAt: row.created_at,
+      action: row.action, outcome: row.outcome, resourceId: row.resource_id }));
+  }
+  readAuditEntries(actor: Actor, input: ResearchScope, sequences: number[]) {
+    const scope = parseContract(ScopeSchema, input);
+    parseContract(z.array(z.number().int().positive().max(Number.MAX_SAFE_INTEGER)).max(200), sequences);
+    this.authorize(actor, scope, scope.kind === 'project' ? 'manage' : 'read');
+    return this.query<{ id: number; actor_id: string; created_at: number; action: string; outcome: string; resource_id: string | null }, [string, string]>(
+      'SELECT id,actor_id,created_at,action,outcome,resource_id FROM audit WHERE scope_key=? AND id IN(SELECT value FROM json_each(?)) ORDER BY id',
+    ).all(scopeKey(scope), JSON.stringify(sequences)).map(row => ({ sequence: row.id, actorId: row.actor_id, createdAt: row.created_at,
+      action: row.action, outcome: row.outcome, resourceId: row.resource_id }));
   }
   counts() {
     return { audit: this.query<{ count: number }, []>('SELECT count(*) AS count FROM audit').get()!.count,

@@ -6,6 +6,7 @@ import { z } from 'zod'
 import { resolveConfigDir, validateNamespacePath } from '@craft-agent/shared/config/namespace'
 import { SqliteResearchRepository } from '../../server-core/src/research/sqlite-repository'
 import { createBioAuthorityServer } from '../../server-core/src/research/authority-server'
+import { registerResearchRpcProfile } from '../../server-core/src/research/rpc-profile'
 const Settings = z.strictObject({ host: z.string().min(1).default('127.0.0.1'), port: z.number().int().min(1).max(65535).default(9100),
   publicOrigin: z.string().url().optional(), trustedProxies: z.array(z.string()).max(32).optional(),
   tls: z.strictObject({ certPath: z.string().min(1), keyPath: z.string().min(1) }).optional(),
@@ -24,10 +25,11 @@ export async function startBioServer() {
     const instance = await createBioAuthorityServer(repository, { ...settings, tls: settings.tls ? {
       cert: readOwnedFile(settings.tls.certPath), key: readOwnedFile(settings.tls.keyPath),
     } : undefined })
+    const profile = registerResearchRpcProfile(instance.server, repository)
     await instance.server.listen()
     let stopped = false
     const stop = () => { if (!stopped) { stopped = true; instance.server.close(); repository.close() } }
-    return { ...instance, stop }
+    return { ...instance, profile, stop }
   } catch (error) { repository.close(); throw error }
 }
 if (import.meta.main) {
