@@ -3,7 +3,8 @@ export type ResearchEntityKind = 'source' | 'snapshot' | 'evidence' | 'report' |
 export type ResearchEntity = ResearchSource | ReadingSnapshot | EvidenceRevision | ReportRevision | ResearchSession | ResearchRun;
 export interface AuthorityUser { id: string; username: string; passwordHash: string; active: boolean; administrator: boolean; revision: number }
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
-export interface ProjectionEntry { sequence: number; sessionId: string; operationId: string; generation: number; hash: string; messages: JsonValue[]; projected: boolean }
+export interface ProjectionEntry { sequence: number; sessionId: string; operationId: string; generation: number; hash: string; messages: JsonValue[]; projected: boolean;
+  format: 'legacy-runtime' | 'stored-snapshot'; header?: { [key: string]: JsonValue } }
 export interface ResearchRepository {
   seedUser(user: AuthorityUser): void;
   getUserForAuth(username: string): AuthorityUser | null;
@@ -14,7 +15,9 @@ export interface ResearchRepository {
   reviewRevision(actor: Actor, kind: 'evidence' | 'report', id: string, expectedRevision: number, decision: 'confirmed' | 'needs-changes', now: number): EvidenceRevision | ReportRevision;
   advanceRun(actor: Actor, id: string, next: RunState, expectedGeneration: number, workerId: string | null, now: number, leaseExpiresAt?: number): ResearchRun;
   appendProjection(actor: Actor, sessionId: string, operationId: string, messages: JsonValue[], generation: number): number;
-  readProjection(actor: Actor, sessionId: string): ProjectionEntry[];
+  appendProjectionSnapshot(actor: Actor, sessionId: string, operationId: string, header: { [key: string]: JsonValue }, messages: JsonValue[], generation: number): number;
+  markProjected(actor: Actor, sessionId: string, operationId: string, generation: number, hash: string): void;
+  readProjection(actor: Actor, sessionId: string, forWrite?: boolean): ProjectionEntry[];
   readAudit(actor: Actor, scope: ResearchScope): Array<{ action: string; outcome: string; resourceId: string | null }>;
   close(): void;
 }

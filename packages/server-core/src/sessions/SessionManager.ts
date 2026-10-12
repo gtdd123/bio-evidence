@@ -3458,14 +3458,14 @@ export class SessionManager implements ISessionManager {
           sessionLog.info(`SDK session ID captured for ${managed.id}: ${sdkSessionId}`)
         }
         this.persistSession(managed)
-        sessionPersistenceQueue.flush(managed.id)
+        void sessionPersistenceQueue.flush(managed.id).catch(() => sessionLog.error('SESSION_PERSISTENCE_FAILED'))
       }
 
       const onSdkSessionIdCleared = () => {
         managed.sdkSessionId = undefined
         sessionLog.info(`SDK session ID cleared for ${managed.id} (resume recovery)`)
         this.persistSession(managed)
-        sessionPersistenceQueue.flush(managed.id)
+        void sessionPersistenceQueue.flush(managed.id).catch(() => sessionLog.error('SESSION_PERSISTENCE_FAILED'))
       }
 
       const onBranchForkInvalidated = () => {
@@ -3475,7 +3475,7 @@ export class SessionManager implements ISessionManager {
         managed.branchFromSdkTurnId = undefined
         sessionLog.info(`Branch fork invalidated for ${managed.id}: cleared all fork metadata`)
         this.persistSession(managed)
-        sessionPersistenceQueue.flush(managed.id)
+        void sessionPersistenceQueue.flush(managed.id).catch(() => sessionLog.error('SESSION_PERSISTENCE_FAILED'))
       }
 
       const getRecoveryMessages = () => {
@@ -5717,7 +5717,7 @@ export class SessionManager implements ISessionManager {
     this.clearPendingPermissionRequestsForSession(sessionId)
 
     // Cancel any pending persistence write (session is being deleted, no need to save)
-    sessionPersistenceQueue.cancel(sessionId)
+    await sessionPersistenceQueue.discardAndWait(sessionId)
 
     // Clean up session-scoped tool callbacks to prevent memory accumulation
     unregisterSessionScopedToolCallbacks(sessionId)
@@ -6230,7 +6230,7 @@ export class SessionManager implements ISessionManager {
             sessionLog.info(`Captured SDK session ID via fallback: ${sdkId}`)
             // Also flush here since we're in fallback mode
             this.persistSession(managed)
-            sessionPersistenceQueue.flush(managed.id)
+            void sessionPersistenceQueue.flush(managed.id).catch(() => sessionLog.error('SESSION_PERSISTENCE_FAILED'))
           }
         }
 

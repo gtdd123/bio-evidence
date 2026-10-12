@@ -296,6 +296,57 @@ export class SqliteResearchRepository implements ResearchRepository {
         .run(sessionId, operationId, scopeKey(session.scope), generation, payload, hash).lastInsertRowid);
     });
   }
+  appendProjectionSnapshot(actor: Actor, sessionId: string, operationId: string, headerInput: { [key: string]: JsonValue },
+    messagesInput: JsonValue[], generation: number): number {
+    parseContract(IdSchema, sessionId); parseContract(IdSchema, operationId); parseContract(GenerationSchema, generation);
+    const header = parseContract(z.object({ id: IdSchema, workspaceRootPath: z.string().min(1), createdAt: GenerationSchema,
+      lastUsedAt: GenerationSchema, messageCount: z.number().int().nonnegative(), tokenUsage: z.record(z.string(), z.json()),
+    }).catchall(z.json()), headerInput);
+    const messages = parseContract(z.array(z.object({ id: IdSchema,
+      type: z.enum(['user', 'assistant', 'tool', 'error', 'status', 'info', 'warning', 'plan', 'auth-request']),
+      content: z.string(), timestamp: GenerationSchema.optional(),
+    }).catchall(z.json())).max(10000), messagesInput);
+    if (header.id !== sessionId || header.messageCount !== messages.length || new Set(messages.map(m => m.id)).size !== messages.length) {
+      throw new ResearchError('BIO_INPUT_INVALID');
+    }
+    const payload = JSON.stringify({ format: 'stored-snapshot', header: headerInput, messages: messagesInput });
+    if (Buffer.byteLength(payload) > 8 * 1024 * 1024) throw new ResearchError('BIO_INPUT_INVALID');
+    const session = parseContract(SessionSchema, this.get(actor, 'session', sessionId));
+    return this.tx(actor, session.scope, 'projection-snapshot', sessionId, current => {
+      this.authorize(current, session.scope, 'write');
+      if (session.ownerId !== current.userId) throw new ResearchError('BIO_ACCESS_DENIED');
+      const hash = digest(payload);
+      const previous = this.query<{ sequence: number; hash: string; generation: number }, [string, string]>(
+        'SELECT sequence,hash,generation FROM projection_journal WHERE session_id=? AND operation_id=?',
+      ).get(sessionId, operationId);
+      if (previous) {
+        if (previous.hash !== hash || previous.generation !== generation) throw new ResearchError('BIO_REVISION_CONFLICT');
+        return previous.sequence;
+      }
+      const latest = this.query<{ generation: number }, [string]>(
+        'SELECT generation FROM projection_journal WHERE session_id=? ORDER BY sequence DESC LIMIT 1',
+      ).get(sessionId);
+      if (latest && generation <= latest.generation) throw new ResearchError('BIO_REVISION_CONFLICT');
+      return Number(this.query('INSERT INTO projection_journal(session_id,operation_id,scope_key,generation,payload,hash) VALUES(?,?,?,?,?,?)')
+        .run(sessionId, operationId, scopeKey(session.scope), generation, payload, hash).lastInsertRowid);
+    });
+  }
+  markProjected(actor: Actor, sessionId: string, operationId: string, generation: number, hash: string): void {
+    parseContract(IdSchema, sessionId); parseContract(IdSchema, operationId); parseContract(GenerationSchema, generation);
+    parseContract(z.string().regex(/^[a-f0-9]{64}$/), hash);
+    const session = parseContract(SessionSchema, this.get(actor, 'session', sessionId));
+    this.tx(actor, session.scope, 'projection-confirm', sessionId, current => {
+      this.authorize(current, session.scope, 'write');
+      if (session.ownerId !== current.userId) throw new ResearchError('BIO_ACCESS_DENIED');
+      const latest = this.query<{ operation_id: string; generation: number; hash: string }, [string]>(
+        'SELECT operation_id,generation,hash FROM projection_journal WHERE session_id=? ORDER BY sequence DESC LIMIT 1',
+      ).get(sessionId);
+      if (latest?.operation_id !== operationId || latest.generation !== generation || latest.hash !== hash) {
+        throw new ResearchError('BIO_REVISION_CONFLICT');
+      }
+      this.query('UPDATE projection_journal SET projected=1 WHERE session_id=? AND operation_id=?').run(sessionId, operationId);
+    });
+  }
   reviewRevision(actor: Actor, kind: 'evidence' | 'report', id: string, expectedRevision: number,
     decision: 'confirmed' | 'needs-changes', now: number): EvidenceRevision | ReportRevision {
     parseContract(z.enum(['evidence', 'report']), kind); parseContract(IdSchema, id);
@@ -356,12 +407,21 @@ export class SqliteResearchRepository implements ResearchRepository {
       return result;
     });
   }
-  readProjection(actor: Actor, sessionId: string): ProjectionEntry[] {
-    this.get(actor, 'session', sessionId);
+  readProjection(actor: Actor, sessionId: string, forWrite = false): ProjectionEntry[] {
+    const session = parseContract(SessionSchema, this.get(actor, 'session', sessionId));
+    if (forWrite) this.tx(actor, session.scope, 'projection-authorize', sessionId, current => {
+      this.authorize(current, session.scope, 'write');
+      if (session.ownerId !== current.userId) throw new ResearchError('BIO_ACCESS_DENIED');
+    });
     return this.query<{ sequence: number; operation_id: string; generation: number; payload: string; hash: string; projected: number }, [string]>(
       'SELECT * FROM projection_journal WHERE session_id=? ORDER BY sequence',
-    ).all(sessionId).map(row => ({ sequence: row.sequence, sessionId, operationId: row.operation_id,
-      generation: row.generation, hash: row.hash, messages: JSON.parse(row.payload) as JsonValue[], projected: row.projected === 1 }));
+    ).all(sessionId).map(row => {
+      const payload = JSON.parse(row.payload);
+      return { sequence: row.sequence, sessionId, operationId: row.operation_id,
+        generation: row.generation, hash: row.hash, projected: row.projected === 1,
+        ...(Array.isArray(payload) ? { format: 'legacy-runtime' as const, messages: payload as JsonValue[] } :
+          { format: 'stored-snapshot' as const, header: payload.header, messages: payload.messages }) };
+    });
   }
   readAudit(actor: Actor, scope: ResearchScope) {
     this.authorize(actor, scope, scope.kind === 'project' ? 'manage' : 'read');

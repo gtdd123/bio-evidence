@@ -77,19 +77,16 @@ describe('session persistence header conflict helpers', () => {
     expect(merged.lastUsedAt).toBe(500)
   })
 
-  it('startup scenario: external metadata differs from local signature', () => {
+  it('merge helper preserves explicitly selected disk metadata', () => {
     const local = makeHeader({ name: 'Local Name', labels: ['local'] })
     const disk = makeHeader({ name: 'External Name', labels: ['external'] })
 
     const localSig = getHeaderMetadataSignature(local)
     const diskSig = getHeaderMetadataSignature(disk)
 
-    // This is the condition used by persistence queue at startup:
-    // no previousSig yet, disk differs from local → preserve external metadata.
-    const hasExternalMetadataChange = diskSig !== localSig
-      && (undefined === undefined || diskSig !== undefined)
-
-    expect(hasExternalMetadataChange).toBe(true)
+    // This exercises the merge helper only. The real queue startup and
+    // previous-signature rules are tested in persistence-durability.test.ts.
+    expect(diskSig).not.toBe(localSig)
 
     const merged = mergeHeaderWithExternalMetadata(local, disk)
     expect(merged.name).toBe('External Name')
