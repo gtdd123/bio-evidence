@@ -381,12 +381,22 @@ export class SqliteResearchRepository implements ResearchRepository {
     return this.tx(actor, value.scope, `${kind}-write`, value.id, current => {
       this.authorize(current, value.scope, 'write');
       const entityId = kind === 'evidence' ? (value as z.infer<typeof EvidenceRevisionSchema>).evidenceId :
-        kind === 'report' ? (value as z.infer<typeof ReportRevisionSchema>).reportId : value.id;
+        kind === 'report' ? (value as z.infer<typeof ReportRevisionSchema>).reportId :
+        kind === 'source' ? (value as z.infer<typeof SourceSchema>).sourceIdentityId ?? value.id : value.id;
       const head = this.query<HeadRow, [string, string]>('SELECT revision,record_id,policy FROM heads WHERE kind=? AND entity_id=?').get(kind, entityId);
       if ((head?.revision ?? 0) !== expectedRevision) throw new ResearchError('BIO_REVISION_CONFLICT');
       if (head && !sameScope(this.binding(kind, head.record_id), value.scope)) throw new ResearchError('BIO_ACCESS_DENIED');
       if ('policy' in value && head?.policy && mergeSessionPolicy(head.policy, [value.policy]) !== value.policy) throw new ResearchError('BIO_POLICY_DENIED');
       if ('revision' in value && value.revision !== expectedRevision + 1) throw new ResearchError('BIO_REVISION_CONFLICT');
+      if (kind === 'source') {
+        const source = value as z.infer<typeof SourceSchema>;
+        if (source.declaration && source.declaration.actorId !== current.userId) throw new ResearchError('BIO_ACCESS_DENIED');
+        if (head && (!source.revision || source.predecessorId !== head.record_id)) throw new ResearchError('BIO_REVISION_CONFLICT');
+        if (head) {
+          const previous = parseContract(SourceSchema, this.get(current, 'source', head.record_id));
+          if (source.createdAt < previous.createdAt) throw new ResearchError('BIO_INPUT_INVALID');
+        }
+      }
       if (kind === 'snapshot') {
         if (head) throw new ResearchError('BIO_REVISION_CONFLICT');
         const snapshot = value as z.infer<typeof SnapshotSchema>;
@@ -394,6 +404,9 @@ export class SqliteResearchRepository implements ResearchRepository {
       }
       if (kind === 'session') {
         const session = value as z.infer<typeof SessionSchema>;
+        const selected = (session.selectedSourceIds ?? []).map(id => parseContract(SourceSchema, this.get(current, 'source', id)));
+        if (selected.some(source => !sameScope(source.scope, session.scope))) throw new ResearchError('BIO_ACCESS_DENIED');
+        if (mergeSessionPolicy(session.policy, selected.map(source => source.policy)) !== session.policy) throw new ResearchError('BIO_POLICY_DENIED');
         if (session.ownerId !== current.userId || (head && parseContract(SessionSchema, this.get(current, 'session', head.record_id)).ownerId !== session.ownerId)) {
           throw new ResearchError('BIO_ACCESS_DENIED');
         }
@@ -424,7 +437,7 @@ export class SqliteResearchRepository implements ResearchRepository {
           ('authorId' in value && value.authorId !== current.userId)) throw new ResearchError('BIO_ACCESS_DENIED');
       const oldBinding = this.query<{ scope_key: string }, [string, string]>('SELECT scope_key FROM bindings WHERE kind=? AND id=?').get(kind, value.id);
       if (oldBinding && oldBinding.scope_key !== scopeKey(value.scope)) throw new ResearchError('BIO_ACCESS_DENIED');
-      if (oldBinding && ['snapshot', 'evidence', 'report'].includes(kind)) throw new ResearchError('BIO_REVISION_CONFLICT');
+      if (oldBinding && ['source', 'snapshot', 'evidence', 'report'].includes(kind)) throw new ResearchError('BIO_REVISION_CONFLICT');
       this.query('INSERT INTO bindings VALUES(?,?,?) ON CONFLICT(kind,id) DO NOTHING').run(kind, value.id, scopeKey(value.scope));
       this.query('INSERT INTO entities VALUES(?,?,?,?) ON CONFLICT(kind,id) DO UPDATE SET payload=excluded.payload')
         .run(kind, value.id, scopeKey(value.scope), JSON.stringify(value));
@@ -440,6 +453,48 @@ export class SqliteResearchRepository implements ResearchRepository {
       }
       this.event(value.scope, kind, value.id, expectedRevision + 1);
       return value;
+    });
+  }
+  sourceHeads(actor: Actor, scope: ResearchScope): z.infer<typeof SourceSchema>[] {
+    return this.tx(actor, scope, 'source-list', null, current => {
+      this.authorize(current, scope, 'read');
+      const budget = this.query<{ count: number; bytes: number }, [string]>(`SELECT count(*) AS count, coalesce(sum(size),0) AS bytes FROM
+        (SELECT length(CAST(e.payload AS BLOB)) AS size FROM entities e JOIN heads h ON h.kind=e.kind AND h.record_id=e.id
+        WHERE e.kind='source' AND e.scope_key=? LIMIT 10001)`).get(scopeKey(scope))!;
+      if (budget.count > 10000 || budget.bytes > 16 * 1024 * 1024) throw new ResearchError('BIO_PROVIDER_BUDGET');
+      const rows = this.query<{ payload: string }, [string]>(`SELECT e.payload FROM entities e JOIN heads h
+        ON h.kind=e.kind AND h.record_id=e.id WHERE e.kind='source' AND e.scope_key=? ORDER BY e.id LIMIT 10001`).all(scopeKey(scope));
+      if (rows.length > 10000) throw new ResearchError('BIO_PROVIDER_BUDGET');
+      return rows.map(row => parseContract(SourceSchema, JSON.parse(row.payload)));
+    });
+  }
+  abstractSnapshot(actor: Actor, sourceId: string): z.infer<typeof SnapshotSchema> | undefined {
+    const source = parseContract(SourceSchema, this.get(actor, 'source', sourceId));
+    return this.tx(actor, source.scope, 'snapshot-list', sourceId, current => {
+      this.authorize(current, source.scope, 'read');
+      const row = this.query<{ payload: string }, [string, string]>(`SELECT payload FROM entities WHERE kind='snapshot'
+        AND scope_key=? AND json_extract(payload,'$.sourceId')=? AND json_extract(payload,'$.format')='abstract' ORDER BY id LIMIT 1`).get(scopeKey(source.scope), sourceId);
+      return row ? parseContract(SnapshotSchema, JSON.parse(row.payload)) : undefined;
+    });
+  }
+  commitSourceSelection(actor: Actor, sessionId: string, expectedRevision: number, source: z.infer<typeof SourceSchema>,
+    newSource: boolean, snapshot?: z.infer<typeof SnapshotSchema>) {
+    return this.tx(actor, source.scope, 'source-select', sessionId, current => {
+      this.authorizeResource(current, 'session', sessionId, 'execute');
+      const session = parseContract(SessionSchema, this.get(current, 'session', sessionId));
+      if (session.revision !== expectedRevision) throw new ResearchError('BIO_REVISION_CONFLICT');
+      if (!sameScope(session.scope, source.scope)) throw new ResearchError('BIO_ACCESS_DENIED');
+      if (newSource) this.put(current, 'source', source, (source.revision ?? 1) - 1);
+      else if (JSON.stringify(this.get(current, 'source', source.id)) !== JSON.stringify(source)) throw new ResearchError('BIO_REVISION_CONFLICT');
+      if (snapshot) this.put(current, 'snapshot', snapshot);
+      const family = source.sourceIdentityId ?? source.id;
+      const selectedSourceIds = (session.selectedSourceIds ?? []).filter(id => {
+        const old = parseContract(SourceSchema, this.get(current, 'source', id));
+        return (old.sourceIdentityId ?? old.id) !== family;
+      });
+      selectedSourceIds.push(source.id);
+      return parseContract(SessionSchema, this.put(current, 'session', { ...session, selectedSourceIds,
+        policy: mergeSessionPolicy(session.policy, [source.policy]), revision: session.revision + 1 }, session.revision));
     });
   }
   appendProjection(actor: Actor, sessionId: string, operationId: string, messagesInput: JsonValue[], generation: number): number {

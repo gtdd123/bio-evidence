@@ -4,7 +4,7 @@
 
 日期：2026-10-09（Asia/Shanghai）
 
-状态：任务清单 2026-10-09 审批 PASS；T00–T09 已完成阶段审批 PASS，T02 完整原基线仍未全绿；T10 进入实施，其余未开始
+状态：任务清单 2026-10-09 审批 PASS；T00–T09 已完成阶段审批 PASS，T02 完整原基线仍未全绿；T10 本地实现独立审批PASS（公网适配器留T17发布阻断），T11进入实施
 
 依据：已批准需求、Constitution、Spec 0.1.0、Plan 0.1.0
 
@@ -298,6 +298,8 @@
 
 **验证：** 三账号撤权/事件、10000文件与frames、公开来源+PDF→证据→报告、两端同会话、cancel/restart、helper出口与fake秘密成品检查，固定Runtime类型/回归/构建。实际模型/真实4090独立标证据，缺信息不虚构PASS。
 
+**T10带入的发布阻断：** 当前开发宿主的虚拟DNS及Bun证书验证导致正式EuropePMC适配器公网未通过。T17负责人（项目开发/部署执行者）须在正常公开DNS与受信CA的部署环境用生产默认适配器实测题录、摘要与开放XML并记录证据；PowerShell官方API成功不替代该检查，禁止关闭TLS/address guard。未通过前不宣称平台可发布。详见evidence/T10-literature.md。
+
 **完成：** 独立评判者检查Spec compliance，另做quality/一致性审阅；有阻断则修复再复审。产物记录exactcommands/exit/output摘要、diff范围、未验证与限制。可用的首版交付不能写成实际私有资料已接入或所有模型已验证。
 
 ## T18 — 公开 GitHub 交付
@@ -318,6 +320,6 @@ T00：准备与 neutral 校验完成；独立评判者复跑 4 pass/0 fail 并�
 
 T01：独立评判者复跑 25 pass/0 fail/exit0，关闭 Windows 混合大小写 hook 旁路后审批 PASS。证据：派生仓库 `docs/bioevidence/evidence/T01-isolation.md`。
 
-T02：2026-10-10 独立阶段审批 PASS；完整原基线尚未全绿，依 Plan18 责任门槛收敛。T03：2026-10-10 阶段审批 PASS。T04：2026-10-11 阶段审批 PASS。T05：2026-10-12 独立阶段审批 PASS，最终相关114项通过，见 evidence/T05-persistence.md。T06：2026-10-12 独立阶段审批 PASS，最终相关161项通过，见 evidence/T06-auth.md。T07：2026-10-12 独立两文档与阶段审批PASS，相关184项通过，见 evidence/T07-authorization.md及T07-channel-coverage.md。T08：2026-10-13 独立阶段与文档审批PASS；广相关205项、资料专项22项及新增RPC权限/重启检查通过；评判独立复跑22/0及4/0，证据见 evidence/T08-materials.md。T09：2026-10-13 独立文档与阶段审批PASS；广相关228项、最终专项27项通过，评判独立27/0/232expects/18.33s及领域类型exit0；实际源码服务预览/下载/停止验证通过，evidence/T09-preview.md。T10：进入实施。T11–T18 未开始。
+T02：2026-10-10 独立阶段审批 PASS；完整原基线尚未全绿，依 Plan18 责任门槛收敛。T03：2026-10-10 阶段审批 PASS。T04：2026-10-11 阶段审批 PASS。T05：2026-10-12 独立阶段审批 PASS，最终相关114项通过，见 evidence/T05-persistence.md。T06：2026-10-12 独立阶段审批 PASS，最终相关161项通过，见 evidence/T06-auth.md。T07：2026-10-12 独立两文档与阶段审批PASS，相关184项通过，见 evidence/T07-authorization.md及T07-channel-coverage.md。T08：2026-10-13 独立阶段与文档审批PASS；广相关205项、资料专项22项及新增RPC权限/重启检查通过；评判独立复跑22/0及4/0，证据见 evidence/T08-materials.md。T09：2026-10-13 独立文档与阶段审批PASS；广相关228项、最终专项27项通过，评判独立27/0/232expects/18.33s及领域类型exit0；实际源码服务预览/下载/停止验证通过，evidence/T09-preview.md。T10：2026-10-13 本地实现、文档和责任门槛独立审批PASS；广回归246/0、最终专项39/0，生产Bun公网适配器尚未通过并列T17发布阻断，见evidence/T10-literature.md。T11进入实施；T12–T18未开始。
 
 实际每项完成后更新任务状态与其验证记录；文档/接口实质改变再次交独立评判者审批，普通执行证据作为审批记录保留，不形成无限递归的自我审批文档。

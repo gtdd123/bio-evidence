@@ -45,9 +45,15 @@ describe('authoritative research transactions', () => {
   test('competing writes with the same expected revision have one winner', async () => {
     repo.put(alice, 'source', source);
     const results = await Promise.allSettled(['First', 'Second'].map(title =>
-      Promise.resolve().then(() => repo.put(alice, 'source', { ...source, title }, 1))));
+      Promise.resolve().then(() => repo.put(alice, 'source', { ...source, id: `paper-${title.toLowerCase()}`, sourceIdentityId: source.id,
+        revision: 2, predecessorId: source.id, title, createdAt: 2 }, 1))));
     expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
     expect(results.filter(result => result.status === 'rejected')).toHaveLength(1);
+  });
+  test('a source revision cannot overwrite the identity of an older record', () => {
+    repo.put(alice, 'source', source);
+    expect(() => repo.put(alice, 'source', { ...source, title: 'Replacement metadata' }, 1)).toThrow('The revision has changed.');
+    expect(repo.get(alice, 'source', source.id)).toEqual(source);
   });
   test('successful writes commit audit and outbox together', () => {
     repo.put(alice, 'source', source);

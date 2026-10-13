@@ -9,14 +9,17 @@ import { createBioAuthorityServer } from '../../server-core/src/research/authori
 import { registerResearchRpcProfile } from '../../server-core/src/research/rpc-profile'
 import { MaterialsService } from '../../server-core/src/research/materials-service'
 import { loadMaterialGrants } from '../../server-core/src/research/material-grants-config'
-import { MaterialBudgetsSchema, MaterialImageBudgetsSchema, ResearchError } from '@bio-evidence/research-core'
+import { MaterialBudgetsSchema, MaterialImageBudgetsSchema, LiteratureBudgetsSchema, ResearchError } from '@bio-evidence/research-core'
 import { createMaterialsHttpAdapter } from '../../server-core/src/research/materials-http'
 import { MaterialPreviewService } from '../../server-core/src/research/material-preview'
+import { LiteratureService } from '../../server-core/src/research/literature-service'
+import { EuropePmcProvider } from '../../server-core/src/research/literature-provider'
 const Settings = z.strictObject({ host: z.string().min(1).default('127.0.0.1'), port: z.number().int().min(1).max(65535).default(9100),
   publicOrigin: z.string().url().optional(), trustedProxies: z.array(z.string()).max(32).optional(),
   tls: z.strictObject({ certPath: z.string().min(1), keyPath: z.string().min(1) }).optional(),
   materialBudgets: MaterialBudgetsSchema.optional(),
   imageBudgets: MaterialImageBudgetsSchema.optional(),
+  literatureBudgets: LiteratureBudgetsSchema.optional(),
 })
 function readOwnedFile(path: string): string {
   const target = validateNamespacePath(resolve(resolveConfigDir(), path))
@@ -39,7 +42,12 @@ export async function startBioServer() {
       return current
     } })
     const previews = new MaterialPreviewService(materials, settings.imageBudgets)
-    const profile = registerResearchRpcProfile(instance.server, repository, materials, previews)
+    const literature = new LiteratureService(repository, new EuropePmcProvider(settings.literatureBudgets), { currentActor: actor => {
+      const current = instance.auth.resolveActor(actor.authSessionId)
+      if (!current || current.userId !== actor.userId) throw new ResearchError('BIO_ACCESS_DENIED')
+      return current
+    } })
+    const profile = registerResearchRpcProfile(instance.server, repository, materials, previews, literature)
     materialHttp = createMaterialsHttpAdapter(profile, instance.auth, instance.boundary, { materials, previews })
     await instance.server.listen()
     let stopPromise: Promise<void> | undefined

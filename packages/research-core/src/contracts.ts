@@ -46,6 +46,19 @@ export const SourceSchema = z.strictObject({
     pmcid: z.string().min(1).max(100).optional(), providerId: z.string().min(1).max(1000).optional(),
   }),
   createdAt: TimestampSchema,
+  sourceIdentityId: IdSchema.optional(), revision: RevisionSchema.optional(), predecessorId: IdSchema.optional(),
+  retrievedAt: TimestampSchema.optional(),
+  contentHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  availability: z.strictObject({ abstract: z.boolean().optional(), fullText: z.boolean().optional() }).optional(),
+  metadataConflictFields: z.array(z.enum(['title', 'authors', 'year', 'abstract', 'identifiers', 'license', 'provider'])).max(7).optional(),
+  declaration: z.strictObject({ actorId: IdSchema, declaredAt: TimestampSchema, kind: z.enum(['explicit-public-pdf', 'public-provider']) }).optional(),
+}).superRefine((value, ctx) => {
+  if (Boolean(value.sourceIdentityId) !== Boolean(value.revision) || (!value.revision && value.predecessorId !== undefined) ||
+    (value.revision === 1 ? value.predecessorId !== undefined : value.revision !== undefined && !value.predecessorId) ||
+    value.declaration && (value.policy !== 'public' || value.declaration.declaredAt > value.createdAt ||
+      (value.declaration.kind === 'explicit-public-pdf' ? value.provider !== 'pdf-import' : value.provider !== 'europe-pmc'))) {
+    ctx.addIssue({ code: 'custom', message: 'Source revision and declaration must match provenance.' });
+  }
 });
 export type ResearchSource = z.infer<typeof SourceSchema>;
 
@@ -188,6 +201,7 @@ export const RunSchema = z.strictObject({
 export type ResearchRun = z.infer<typeof RunSchema>;
 export const SessionSchema = z.strictObject({
   id: IdSchema, ownerId: IdSchema, scope: ScopeSchema, name: z.string().min(1).max(300), policy: PolicySchema,
+  selectedSourceIds: IdListSchema.optional(),
   revision: RevisionSchema, createdAt: TimestampSchema,
 }).refine(value => value.scope.kind !== 'personal' || value.ownerId === value.scope.ownerId);
 export type ResearchSession = z.infer<typeof SessionSchema>;
@@ -199,6 +213,10 @@ export const BIO_ERROR_MESSAGES = {
   BIO_REVISION_CONFLICT: 'The revision has changed. Refresh before saving.',
   BIO_INVALID_TRANSITION: 'The research run cannot enter that state.',
   BIO_STORAGE_UNAVAILABLE: 'Research storage is unavailable.',
+  BIO_PROVIDER_RATE_LIMITED: 'The literature provider is rate limited. Retry later.',
+  BIO_PROVIDER_TIMEOUT: 'The literature provider timed out. Retry the request.',
+  BIO_PROVIDER_UNAVAILABLE: 'The literature provider is unavailable.',
+  BIO_PROVIDER_BUDGET: 'The literature response exceeds the configured budget.',
 } as const;
 export type BioErrorCode = keyof typeof BIO_ERROR_MESSAGES;
 export class ResearchError extends Error {
