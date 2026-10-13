@@ -4,7 +4,7 @@ import { IdSchema, IdListSchema, ScopeSchema, RevisionSchema, GenerationSchema, 
   type EvidenceRevision, type ReportRevision, type ResearchRun, type ResearchSource } from './contracts.ts';
 import type { ResearchSpaceView, ResearchMemberView, ResearchAuditEntry } from './repository.ts';
 import { ReportClaimSchema, ReportTitleSchema, nonBlankText } from './contracts.ts';
-import type { MaterialGrantView, MaterialRoot, MaterialPage, MaterialSearchResult, MaterialDirectoryState, MaterialAnnotation } from './materials.ts';
+import { MaterialImageRequestSchema, type MaterialImageResult, type MaterialGrantView, type MaterialRoot, type MaterialPage, type MaterialSearchResult, type MaterialDirectoryState, type MaterialAnnotation } from './materials.ts';
 
 export const RESEARCH_PROTOCOL_VERSION = 1 as const;
 export const RESEARCH_CHANNELS = {
@@ -16,6 +16,7 @@ export const RESEARCH_CHANNELS = {
   INDEX_MATERIAL_DIRECTORY: 'research:v1:indexMaterialDirectory', LIST_MATERIAL_DIRECTORY: 'research:v1:listMaterialDirectory',
   SEARCH_MATERIAL_TEXT: 'research:v1:searchMaterialText',
   GET_MATERIAL_INDEX: 'research:v1:getMaterialIndex', GET_MATERIAL_ANNOTATION: 'research:v1:getMaterialAnnotation', SAVE_MATERIAL_ANNOTATION: 'research:v1:saveMaterialAnnotation',
+  GET_MATERIAL_IMAGE: 'research:v1:getMaterialImage',
   CREATE_SESSION: 'research:v1:createSession', GET_SESSION: 'research:v1:getSession',
   LIST_SESSIONS: 'research:v1:listSessions', SEARCH: 'research:v1:search',
   GET_SNAPSHOT: 'research:v1:getSnapshot', SAVE_EVIDENCE: 'research:v1:saveEvidence',
@@ -25,6 +26,7 @@ export const RESEARCH_CHANNELS = {
 } as const;
 export const CreateSessionSchema = z.strictObject({ scope: ScopeSchema, name: z.string().trim().min(1).max(300), sourceIds: IdListSchema.default([]) });
 export const ResearchRequestSchemas = {
+  [RESEARCH_CHANNELS.GET_MATERIAL_IMAGE]: MaterialImageRequestSchema,
   [RESEARCH_CHANNELS.LIST_MATERIAL_GRANTS]: z.strictObject({ scope: ScopeSchema }),
   [RESEARCH_CHANNELS.REGISTER_MATERIAL]: z.strictObject({ grantId: IdSchema, relativeDir: z.string().max(4096).default('') }),
   [RESEARCH_CHANNELS.LIST_MATERIALS]: z.strictObject({ scope: ScopeSchema, cursor: IdSchema.optional(), pageSize: z.number().int().min(1).max(200).default(100) }),
@@ -67,6 +69,7 @@ export function parseResearchRequest(channel: string, input: unknown): unknown {
 }
 // Extends the existing typed RPC transport; handlers are registered only after auth integration.
 export interface ResearchRpcChannelMap {
+  'research:v1:getMaterialImage': { args: [ResearchRequest<'research:v1:getMaterialImage'>]; result: MaterialImageResult };
   'research:v1:listMaterialGrants': { args: [ResearchRequest<'research:v1:listMaterialGrants'>]; result: MaterialGrantView[] };
   'research:v1:registerMaterial': { args: [ResearchRequest<'research:v1:registerMaterial'>]; result: MaterialRoot };
   'research:v1:listMaterials': { args: [ResearchRequest<'research:v1:listMaterials'>]; result: { items: MaterialRoot[]; nextCursor?: string } };

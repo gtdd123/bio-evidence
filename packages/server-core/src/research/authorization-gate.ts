@@ -2,17 +2,19 @@ import { z } from 'zod'
 import { RESEARCH_CHANNELS as R, ResearchRequestSchemas, ResearchEventSchema, ResearchError, parseResearchRequest,
   parseContract, ScopeSchema, SessionSchema, SourceSchema, EvidenceRevisionSchema, ReportRevisionSchema, sameScope,
   MaterialRootSchema, MaterialGrantViewSchema, MaterialPageSchema, MaterialSearchResultSchema, MaterialDirectoryStateSchema, MaterialAnnotationSchema,
+  MaterialImageResultSchema,
   type Actor, type ResearchRepository, type ResearchRequestChannel, type ResearchScope,
 } from '@bio-evidence/research-core'
 import { getAllChannelValues } from '@craft-agent/shared/protocol'
 import type { TransportAuthorizationGate } from '../transport/types'
 import type { MaterialsService } from './materials-service'
 import { materialRelativePath } from './material-paths'
+import type { MaterialPreviewService } from './material-preview'
 
 /** Every new endpoint still uses this common current-authority resolver. */
 export class ResearchAuthorizationGate implements TransportAuthorizationGate {
   private enabled = new Set<ResearchRequestChannel>()
-  constructor(private readonly repository: ResearchRepository, private readonly materials?: MaterialsService) {}
+  constructor(private readonly repository: ResearchRepository, private readonly materials?: MaterialsService, private readonly previews?: MaterialPreviewService) {}
   enable(channel: ResearchRequestChannel): void {
     if (!Object.hasOwn(ResearchRequestSchemas, channel)) throw new ResearchError('BIO_ACCESS_DENIED')
     this.enabled.add(channel)
@@ -34,6 +36,9 @@ export class ResearchAuthorizationGate implements TransportAuthorizationGate {
       case R.GET_MATERIAL: case R.INDEX_MATERIAL_DIRECTORY: case R.LIST_MATERIAL_DIRECTORY: case R.SEARCH_MATERIAL_TEXT:
       case R.GET_MATERIAL_INDEX: case R.GET_MATERIAL_ANNOTATION:
         this.repository.materialRoot(actor, input.rootId as string); return
+      case R.GET_MATERIAL_IMAGE:
+        if (!this.materials || !this.previews) throw new ResearchError('BIO_ACCESS_DENIED')
+        this.materials.fileEntry(actor, input.rootId as string, input.relativeDir as string, input.generation as number, input.fileId as string); return
       case R.SAVE_MATERIAL_ANNOTATION: {
         const root = this.repository.materialRoot(actor, input.rootId as string)
         this.repository.authorizeScope(actor, root.scope, 'write'); return
@@ -68,6 +73,11 @@ export class ResearchAuthorizationGate implements TransportAuthorizationGate {
   authorizeResponse(actor: Actor, channel: string, args: unknown[], result: unknown): void {
     this.authorizeRequest(actor, channel, args)
     const input = parseResearchRequest(channel, args[0]) as Record<string, unknown>
+    if (channel === R.GET_MATERIAL_IMAGE) {
+      const image = parseContract(MaterialImageResultSchema, result)
+      if (!this.previews || image.rootId !== input.rootId || image.fileId !== input.fileId || image.generation !== input.generation || image.frameIndex !== input.frameIndex || image.kind !== input.kind) throw new ResearchError('BIO_ACCESS_DENIED')
+      this.previews.validateResult(actor, input.relativeDir as string, image)
+    }
     if (channel === R.REGISTER_MATERIAL || channel === R.GET_MATERIAL) {
       const root = parseContract(MaterialRootSchema, result), authoritative = this.repository.materialRoot(actor, root.id)
       if (JSON.stringify(root) !== JSON.stringify(authoritative) || (channel === R.GET_MATERIAL ? root.id !== input.rootId : root.grantId !== input.grantId)) throw new ResearchError('BIO_ACCESS_DENIED')

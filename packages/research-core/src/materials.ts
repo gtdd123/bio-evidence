@@ -31,3 +31,15 @@ export const MaterialBudgetsSchema = z.strictObject({ maxEntries: z.number().int
   scanMs: z.number().int().min(1).max(30000).default(30000), textFileBytes: z.number().int().min(1).max(262144).default(262144),
   textFiles: z.number().int().min(1).max(64).default(64), textTotalBytes: z.number().int().min(1).max(16777216).default(16777216),
   searchMs: z.number().int().min(1).max(2000).default(2000) })
+const MaterialImageBase = z.strictObject({ rootId: IdSchema, fileId: IdSchema, generation: z.number().int().positive(), frameIndex: GenerationSchema,
+  kind: z.enum(['metadata', 'thumbnail', 'view']), policy: z.literal('restricted') })
+export const MaterialImageResultSchema = z.discriminatedUnion('status', [
+  MaterialImageBase.extend({ status: z.literal('ok'), width: z.number().int().positive(), height: z.number().int().positive(), pages: z.number().int().positive(),
+    format: z.enum(['png', 'jpeg', 'tiff']), bytes: z.instanceof(Uint8Array).refine(value => value.length <= 20971520).optional() }),
+  MaterialImageBase.extend({ status: z.enum(['invalid', 'unsupported', 'budget', 'timeout', 'busy', 'unavailable']) }),
+])
+export type MaterialImageResult = z.infer<typeof MaterialImageResultSchema>
+export const MaterialFileRequestSchema = z.strictObject({ rootId: IdSchema, fileId: IdSchema, generation: z.number().int().positive(), relativeDir: z.string().max(4096).default('') })
+export const MaterialImageRequestSchema = MaterialFileRequestSchema.extend({ kind: z.enum(['metadata', 'thumbnail', 'view']).default('metadata'), frameIndex: z.number().int().min(0).max(1000000).default(0) })
+export const MaterialImageBudgetsSchema = z.strictObject({ maxInputBytes: z.number().int().min(1).max(268435456).default(268435456),
+  maxPixels: z.number().int().min(1).max(50000000).default(50000000), concurrency: z.number().int().min(1).max(2).default(2), timeoutMs: z.number().int().min(1).max(5000).default(5000) })

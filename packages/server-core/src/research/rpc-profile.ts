@@ -6,8 +6,9 @@ import type { WsRpcServer } from '../transport/server'
 import type { RequestContext } from '../transport/types'
 import { ResearchAuthorizationGate } from './authorization-gate'
 import type { MaterialsService } from './materials-service'
-export function registerResearchRpcProfile(server: WsRpcServer, repository: ResearchRepository, materials?: MaterialsService) {
-  const gate = new ResearchAuthorizationGate(repository, materials)
+import type { MaterialPreviewService } from './material-preview'
+export function registerResearchRpcProfile(server: WsRpcServer, repository: ResearchRepository, materials?: MaterialsService, previews?: MaterialPreviewService) {
+  const gate = new ResearchAuthorizationGate(repository, materials, previews)
   server.setAuthorizationGate(gate)
   const handlers = new Map<string, (current: Actor, input: any) => unknown>()
   const actor = (context: RequestContext): Actor => {
@@ -37,6 +38,7 @@ export function registerResearchRpcProfile(server: WsRpcServer, repository: Rese
     register(R.GET_MATERIAL_ANNOTATION, (current, input) => materials.annotation(current, input.rootId, input.relativeDir, input.generation, input.fileId))
     register(R.SAVE_MATERIAL_ANNOTATION, (current, input) => materials.saveAnnotation(current, input.rootId, input.relativeDir, input.generation, input.fileId, input.expectedRevision, input.note, input.tags))
   }
+  if (materials && previews) register(R.GET_MATERIAL_IMAGE, (current, input) => previews.preview(current, input.rootId, input.relativeDir, input.generation, input.fileId, input.kind, input.frameIndex))
   register(R.LIST_SPACES, current => repository.listSpaces(current))
   register(R.READ_AUDIT, (current, input) => repository.readAudit(current, input.scope, input.pageSize, input.afterSequence))
   register(R.CREATE_PROJECT, (current, input) => repository.createProject(current, randomUUID(), input.name))

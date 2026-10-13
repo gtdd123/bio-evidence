@@ -9,12 +9,14 @@ import { createBioAuthorityServer } from '../../server-core/src/research/authori
 import { registerResearchRpcProfile } from '../../server-core/src/research/rpc-profile'
 import { MaterialsService } from '../../server-core/src/research/materials-service'
 import { loadMaterialGrants } from '../../server-core/src/research/material-grants-config'
-import { MaterialBudgetsSchema, ResearchError } from '@bio-evidence/research-core'
+import { MaterialBudgetsSchema, MaterialImageBudgetsSchema, ResearchError } from '@bio-evidence/research-core'
 import { createMaterialsHttpAdapter } from '../../server-core/src/research/materials-http'
+import { MaterialPreviewService } from '../../server-core/src/research/material-preview'
 const Settings = z.strictObject({ host: z.string().min(1).default('127.0.0.1'), port: z.number().int().min(1).max(65535).default(9100),
   publicOrigin: z.string().url().optional(), trustedProxies: z.array(z.string()).max(32).optional(),
   tls: z.strictObject({ certPath: z.string().min(1), keyPath: z.string().min(1) }).optional(),
   materialBudgets: MaterialBudgetsSchema.optional(),
+  imageBudgets: MaterialImageBudgetsSchema.optional(),
 })
 function readOwnedFile(path: string): string {
   const target = validateNamespacePath(resolve(resolveConfigDir(), path))
@@ -36,11 +38,12 @@ export async function startBioServer() {
       if (!current || current.userId !== actor.userId) throw new ResearchError('BIO_ACCESS_DENIED')
       return current
     } })
-    const profile = registerResearchRpcProfile(instance.server, repository, materials)
-    materialHttp = createMaterialsHttpAdapter(profile, instance.auth, instance.boundary)
+    const previews = new MaterialPreviewService(materials, settings.imageBudgets)
+    const profile = registerResearchRpcProfile(instance.server, repository, materials, previews)
+    materialHttp = createMaterialsHttpAdapter(profile, instance.auth, instance.boundary, { materials, previews })
     await instance.server.listen()
-    let stopped = false
-    const stop = () => { if (!stopped) { stopped = true; instance.server.close(); repository.close() } }
+    let stopPromise: Promise<void> | undefined
+    const stop = () => stopPromise ??= (async () => { instance.server.close(); await previews.close(); repository.close() })()
     return { ...instance, profile, stop }
   } catch (error) { repository.close(); throw error }
 }
@@ -48,7 +51,8 @@ if (import.meta.main) {
   try {
     const instance = await startBioServer()
     console.log(`BioEvidence account service: ${instance.boundary.publicOrigin}`)
-    process.once('SIGINT', () => { instance.stop(); process.exit(0) })
-    process.once('SIGTERM', () => { instance.stop(); process.exit(0) })
+    const shutdown = () => { void instance.stop().then(() => process.exit(0)).catch(() => process.exit(1)) }
+    process.once('SIGINT', shutdown)
+    process.once('SIGTERM', shutdown)
   } catch { console.error('BioEvidence service could not start. Check service settings, TLS and the owned data directory.'); process.exitCode = 1 }
 }

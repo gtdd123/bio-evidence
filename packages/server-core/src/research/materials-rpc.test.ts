@@ -9,6 +9,9 @@ import { createBioAuthorityServer } from './authority-server'
 import { registerResearchRpcProfile } from './rpc-profile'
 import { inside } from './material-paths'
 import { createMaterialsHttpAdapter } from './materials-http'
+import sharp from 'sharp'
+import { MaterialPreviewService } from './material-preview'
+import { deserializeEnvelope } from '../transport/codec'
 let root: string, repo: SqliteResearchRepository, instance: Awaited<ReturnType<typeof createBioAuthorityServer>>
 let alice: Awaited<ReturnType<typeof instance.auth.login>>, bob: typeof alice, materials: MaterialsService
 const sockets: WebSocket[] = [], scope = { kind: 'project', projectId: 'project-a' } as const
@@ -24,8 +27,8 @@ beforeEach(async () => {
     if (!current || current.userId !== actor.userId) throw Error('Authentication required')
     return current
   } })
-  const profile = registerResearchRpcProfile(instance.server, repo, materials)
-  http = createMaterialsHttpAdapter(profile, instance.auth, instance.boundary); await instance.server.listen()
+  const previews = new MaterialPreviewService(materials), profile = registerResearchRpcProfile(instance.server, repo, materials, previews)
+  http = createMaterialsHttpAdapter(profile, instance.auth, instance.boundary, { materials, previews }); await instance.server.listen()
 })
 afterEach(() => {
   for (const ws of sockets.splice(0)) ws.terminate()
@@ -42,7 +45,7 @@ async function connect(login: typeof alice) {
 }
 async function invoke(ws: WebSocket, name: string, input: unknown) {
   return await new Promise<any>(resolve => {
-    ws.once('message', data => resolve(JSON.parse(data.toString())))
+    ws.once('message', data => resolve(deserializeEnvelope(data.toString())))
     ws.send(JSON.stringify({ id: crypto.randomUUID(), type: 'request', channel: `research:v1:${name}`, args: [input] }))
   })
 }
@@ -91,4 +94,48 @@ test('annotations require an editing role and cannot move a file identifier betw
   const saved = await invoke(owner, 'saveMaterialAnnotation', input)
   expect(saved.error).toBeUndefined(); expect(saved.result.revision).toBe(1)
   expect((await invoke(viewer, 'getMaterialAnnotation', { rootId: first.id, fileId, generation: page.generation })).result.note).toBe('Synthetic note')
+})
+test('authenticated HTTP image preview and original download are bound to a selected file', async () => {
+  const input = await sharp({ create: { width: 800, height: 400, channels: 3, background: '#56a1dc' } }).png().toBuffer()
+  writeFileSync(join(root, 'frame1.png'), input)
+  const material = materials.registerRoot(alice.actor, 'grant-a', ''); await materials.indexDirectory(alice.actor, material.id)
+  const page = materials.list(alice.actor, material.id), fileId = page.items[0]!.id
+  const endpoint = `http://127.0.0.1:${instance.server.port}/api/materials/${material.id}?fileId=${fileId}&generation=${page.generation}`
+  const headers = { Authorization: `Bearer ${bob.token}` }
+  const preview = await fetch(`${endpoint}&view=preview&kind=thumbnail`, { headers })
+  expect(preview.status).toBe(200); expect(preview.headers.get('content-type')).toBe('image/png')
+  expect((await sharp(Buffer.from(await preview.arrayBuffer())).metadata()).width).toBe(256)
+  const original = await fetch(`${endpoint}&view=download`, { headers })
+  expect(original.status).toBe(200); expect(original.headers.get('content-disposition')).toContain('attachment')
+  expect(Buffer.from(await original.arrayBuffer()).equals(input)).toBe(true)
+  repo.setMember(alice.actor, 'project-a', bob.account.id, 'viewer', false, 2)
+  expect((await fetch(`${endpoint}&view=preview`, { headers })).status).toBe(403)
+  expect((await fetch(`${endpoint}&view=download`, { headers })).status).toBe(403)
+})
+test('membership revoked during a real HTTP original stream prevents complete delivery', async () => {
+  const bytes = Buffer.alloc(8 * 1024 * 1024, 72); writeFileSync(join(root, 'large.bin'), bytes)
+  const material = materials.registerRoot(alice.actor, 'grant-a', ''); await materials.indexDirectory(alice.actor, material.id)
+  const page = materials.list(alice.actor, material.id)
+  const response = await fetch(`http://127.0.0.1:${instance.server.port}/api/materials/${material.id}?view=download&generation=${page.generation}&fileId=${page.items[0]!.id}`, { headers: { Authorization: `Bearer ${bob.token}` } })
+  expect(response.status).toBe(200)
+  const reader = response.body!.getReader(), first = await reader.read()
+  let received = first.value?.length ?? 0, interrupted = false
+  expect(received).toBeGreaterThan(0)
+  repo.setMember(alice.actor, 'project-a', bob.account.id, 'viewer', false, 2)
+  try { while (true) { const result = await reader.read(); if (result.done) break; received += result.value.length } } catch { interrupted = true }
+  finally { reader.releaseLock() }
+  expect(interrupted).toBe(true); expect(received).toBeLessThan(bytes.length)
+}, 10000)
+test('shared authenticated RPC exposes frame metadata and bounded previews for the exact selected file', async () => {
+  writeFileSync(join(root, 'frame1.png'), await sharp({ create: { width: 800, height: 400, channels: 3, background: '#56a1dc' } }).png().toBuffer())
+  const material = materials.registerRoot(alice.actor, 'grant-a', ''); await materials.indexDirectory(alice.actor, material.id)
+  const page = materials.list(alice.actor, material.id), ws = await connect(bob)
+  const input = { rootId: material.id, fileId: page.items[0]!.id, generation: page.generation }
+  const info = await invoke(ws, 'getMaterialImage', input)
+  expect(info.error).toBeUndefined(); expect(info.result.width).toBe(800); expect(info.result.pages).toBe(1)
+  const preview = await invoke(ws, 'getMaterialImage', { ...input, kind: 'thumbnail' })
+  expect(preview.error).toBeUndefined(); expect(preview.result.width).toBe(256); expect(preview.result.bytes).toBeDefined()
+  expect(preview.result.bytes).toBeInstanceOf(Uint8Array)
+  expect((await sharp(preview.result.bytes).metadata()).format).toBe('png')
+  expect((await invoke(ws, 'getMaterialImage', { ...input, fileId: 'unknown' })).error).toBeDefined()
 })

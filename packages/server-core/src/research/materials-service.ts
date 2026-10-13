@@ -6,6 +6,7 @@ import { z } from 'zod'
 import { ResearchError, parseContract, DeploymentGrantSchema, MaterialEntrySchema, MaterialBudgetsSchema, type Actor, type DeploymentGrant, type MaterialRoot,
   type MaterialPage, type MaterialGrantView, type ResearchScope, sameScope, type MaterialSearchResult, type ResearchRepository, type StoredDeploymentGrant, type MaterialDirectoryState, type IndexedMaterialEntry } from '@bio-evidence/research-core'
 import { checkedGrantRoot, checkedMaterialPath, materialRelativePath, fileSignature, naturalMaterialKey, inside } from './material-paths'
+import { ControlledMaterialFile } from './material-file'
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 const Cursor = z.strictObject({ rootId: z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/), key: z.string().regex(/^[a-f0-9]{64}$/), generation: z.number().int().positive(), sort: z.string().max(4096), id: z.string().regex(/^[a-f0-9]{64}$/) })
 interface MaterialOperations {
@@ -89,6 +90,41 @@ export class MaterialsService {
     if (!lstatSync(path).isDirectory()) throw new ResearchError('BIO_INPUT_INVALID')
     return this.repository.createMaterialRoot(actor, { id: randomUUID(), scope: grant.scope, grantId, relativeDir,
       label: relativeDir ? basename(path) : grant.label, policy: 'restricted' })
+  }
+  async openFile(actor: Actor, rootId: string, relativeDir: string, generation: number, fileId: string): Promise<ControlledMaterialFile> {
+    actor = Object.freeze({ ...actor })
+    const directory = this.directory(actor, rootId, relativeDir), entry = this.repository.materialEntry(actor, rootId, directory.key, generation, fileId)
+    if (entry.kind !== 'file') throw new ResearchError('BIO_INPUT_INVALID')
+    const path = checkedMaterialPath(directory.grant.rootPath, [directory.root.relativeDir, entry.relativePath].filter(Boolean).join('/'))
+    const check = () => {
+      this.directory(actor, rootId, relativeDir)
+      const state = this.repository.materialDirectory(actor, rootId, directory.key)
+      if (state.status !== 'complete' || state.generation !== generation || state.signature !== fileSignature(directory.path) || entry.signature !== fileSignature(path)) throw new ResearchError('BIO_REVISION_CONFLICT')
+      checkedMaterialPath(directory.grant.rootPath, [directory.root.relativeDir, entry.relativePath].filter(Boolean).join('/'))
+    }
+    check()
+    const before = lstatSync(path, { bigint: true })
+    const handle = await (this.operations.openFile ?? open)(path, constants.O_RDONLY | (process.platform === 'win32' ? 0 : constants.O_NOFOLLOW))
+    const validate = async () => {
+      check()
+      const info = await handle.stat({ bigint: true })
+      if (!info.isFile() || info.dev !== before.dev || info.ino !== before.ino || info.size !== before.size || info.mtimeNs !== before.mtimeNs || info.ctimeNs !== before.ctimeNs) throw new ResearchError('BIO_REVISION_CONFLICT')
+      check()
+    }
+    try {
+      await validate()
+      return new ControlledMaterialFile(MaterialEntrySchema.parse({ id: entry.id, name: entry.name, relativePath: entry.relativePath, kind: entry.kind,
+        size: entry.size, modifiedAt: entry.modifiedAt, policy: 'restricted' }), handle, validate)
+    } catch (error) { await handle.close(); throw error }
+  }
+  fileEntry(actor: Actor, rootId: string, relativeDir: string, generation: number, fileId: string) {
+    const directory = this.directory(actor, rootId, relativeDir), state = this.repository.materialDirectory(actor, rootId, directory.key)
+    const entry = this.repository.materialEntry(actor, rootId, directory.key, generation, fileId)
+    const path = checkedMaterialPath(directory.grant.rootPath, [directory.root.relativeDir, entry.relativePath].filter(Boolean).join('/'))
+    if (state.signature !== fileSignature(directory.path) || entry.signature !== fileSignature(path)) throw new ResearchError('BIO_REVISION_CONFLICT')
+    if (entry.kind !== 'file') throw new ResearchError('BIO_INPUT_INVALID')
+    return MaterialEntrySchema.parse({ id: entry.id, name: entry.name, relativePath: entry.relativePath, kind: entry.kind,
+      size: entry.size, modifiedAt: entry.modifiedAt, policy: 'restricted' })
   }
   private directory(actor: Actor, rootId: string, input: string) {
     const root = this.repository.materialRoot(actor, rootId), grant = this.grant(actor, root.grantId)
