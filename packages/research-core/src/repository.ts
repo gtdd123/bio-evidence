@@ -1,4 +1,5 @@
 import type { Actor, ResearchScope, ResearchSource, ReadingSnapshot, EvidenceRevision, ReportRevision, ResearchSession, ResearchRun, RunState } from './contracts.ts';
+import type { StoredDeploymentGrant, MaterialRoot, MaterialDirectoryState, IndexedMaterialEntry, MaterialAnnotation } from './materials.ts';
 export type ResearchEntityKind = 'source' | 'snapshot' | 'evidence' | 'report' | 'session' | 'run';
 export type ResearchEntity = ResearchSource | ReadingSnapshot | EvidenceRevision | ReportRevision | ResearchSession | ResearchRun;
 export interface AuthorityUser { id: string; username: string; passwordHash: string; active: boolean; administrator: boolean; revision: number }
@@ -40,6 +41,19 @@ export interface ResearchRepository {
   readProjection(actor: Actor, sessionId: string, forWrite?: boolean): ProjectionEntry[];
   readAudit(actor: Actor, scope: ResearchScope, pageSize?: number, afterSequence?: number): ResearchAuditEntry[];
   readAuditEntries(actor: Actor, scope: ResearchScope, sequences: number[]): ResearchAuditEntry[];
+  installDeploymentGrants(grants: StoredDeploymentGrant[]): void;
+  materialGrant(actor: Actor, grantId: string, manage?: boolean): StoredDeploymentGrant;
+  createMaterialRoot(actor: Actor, material: MaterialRoot): MaterialRoot;
+  materialRoot(actor: Actor, rootId: string): MaterialRoot;
+  listMaterialRoots(actor: Actor, scope: ResearchScope, pageSize: number, cursor?: string): { items: MaterialRoot[]; nextCursor?: string };
+  beginMaterialDirectory(actor: Actor, rootId: string, state: MaterialDirectoryState): void;
+  writeMaterialIndex(actor: Actor, rootId: string, state: MaterialDirectoryState, entries: IndexedMaterialEntry[]): void;
+  completeMaterialDirectory(actor: Actor, rootId: string, state: MaterialDirectoryState): void;
+  materialDirectory(actor: Actor, rootId: string, directoryKey: string): MaterialDirectoryState;
+  materialEntries(actor: Actor, rootId: string, directoryKey: string, generation: number, afterSort: string, afterId: string, limit: number): IndexedMaterialEntry[];
+  materialEntry(actor: Actor, rootId: string, directoryKey: string, generation: number, fileId: string): IndexedMaterialEntry;
+  materialAnnotation(actor: Actor, rootId: string, directoryKey: string, generation: number, fileId: string): MaterialAnnotation;
+  saveMaterialAnnotation(actor: Actor, rootId: string, directoryKey: string, generation: number, annotation: MaterialAnnotation, expectedRevision: number): MaterialAnnotation;
   close(): void;
 }
 export interface ResearchServiceContext { readonly repository: ResearchRepository }

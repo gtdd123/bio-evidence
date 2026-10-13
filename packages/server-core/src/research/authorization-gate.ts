@@ -1,15 +1,18 @@
 import { z } from 'zod'
 import { RESEARCH_CHANNELS as R, ResearchRequestSchemas, ResearchEventSchema, ResearchError, parseResearchRequest,
   parseContract, ScopeSchema, SessionSchema, SourceSchema, EvidenceRevisionSchema, ReportRevisionSchema, sameScope,
+  MaterialRootSchema, MaterialGrantViewSchema, MaterialPageSchema, MaterialSearchResultSchema, MaterialDirectoryStateSchema, MaterialAnnotationSchema,
   type Actor, type ResearchRepository, type ResearchRequestChannel, type ResearchScope,
 } from '@bio-evidence/research-core'
 import { getAllChannelValues } from '@craft-agent/shared/protocol'
 import type { TransportAuthorizationGate } from '../transport/types'
+import type { MaterialsService } from './materials-service'
+import { materialRelativePath } from './material-paths'
 
 /** Every new endpoint still uses this common current-authority resolver. */
 export class ResearchAuthorizationGate implements TransportAuthorizationGate {
   private enabled = new Set<ResearchRequestChannel>()
-  constructor(private readonly repository: ResearchRepository) {}
+  constructor(private readonly repository: ResearchRepository, private readonly materials?: MaterialsService) {}
   enable(channel: ResearchRequestChannel): void {
     if (!Object.hasOwn(ResearchRequestSchemas, channel)) throw new ResearchError('BIO_ACCESS_DENIED')
     this.enabled.add(channel)
@@ -24,6 +27,17 @@ export class ResearchAuthorizationGate implements TransportAuthorizationGate {
     if (args.length !== 1) throw new ResearchError('BIO_INPUT_INVALID')
     const input = parseResearchRequest(channel, args[0]) as Record<string, unknown>
     switch (channel) {
+      case R.LIST_MATERIAL_GRANTS: case R.LIST_MATERIALS:
+        this.repository.authorizeScope(actor, input.scope as ResearchScope, 'read'); return
+      case R.REGISTER_MATERIAL:
+        this.repository.materialGrant(actor, input.grantId as string, true); return
+      case R.GET_MATERIAL: case R.INDEX_MATERIAL_DIRECTORY: case R.LIST_MATERIAL_DIRECTORY: case R.SEARCH_MATERIAL_TEXT:
+      case R.GET_MATERIAL_INDEX: case R.GET_MATERIAL_ANNOTATION:
+        this.repository.materialRoot(actor, input.rootId as string); return
+      case R.SAVE_MATERIAL_ANNOTATION: {
+        const root = this.repository.materialRoot(actor, input.rootId as string)
+        this.repository.authorizeScope(actor, root.scope, 'write'); return
+      }
       case R.LIST_SPACES: case R.CREATE_PROJECT:
         this.repository.currentAccount(actor); return
       case R.READ_AUDIT:
@@ -54,6 +68,42 @@ export class ResearchAuthorizationGate implements TransportAuthorizationGate {
   authorizeResponse(actor: Actor, channel: string, args: unknown[], result: unknown): void {
     this.authorizeRequest(actor, channel, args)
     const input = parseResearchRequest(channel, args[0]) as Record<string, unknown>
+    if (channel === R.REGISTER_MATERIAL || channel === R.GET_MATERIAL) {
+      const root = parseContract(MaterialRootSchema, result), authoritative = this.repository.materialRoot(actor, root.id)
+      if (JSON.stringify(root) !== JSON.stringify(authoritative) || (channel === R.GET_MATERIAL ? root.id !== input.rootId : root.grantId !== input.grantId)) throw new ResearchError('BIO_ACCESS_DENIED')
+      if (channel === R.REGISTER_MATERIAL && root.relativeDir !== materialRelativePath(input.relativeDir as string)) throw new ResearchError('BIO_ACCESS_DENIED')
+    } else if (channel === R.LIST_MATERIAL_GRANTS) {
+      for (const grant of parseContract(z.array(MaterialGrantViewSchema).max(1000), result)) {
+        const authoritative = this.repository.materialGrant(actor, grant.id)
+        if (!sameScope(authoritative.scope, grant.scope) || !sameScope(grant.scope, input.scope as ResearchScope)) throw new ResearchError('BIO_ACCESS_DENIED')
+      }
+      if (!this.materials || JSON.stringify(result) !== JSON.stringify(this.materials.listGrants(actor, input.scope as ResearchScope))) throw new ResearchError('BIO_ACCESS_DENIED')
+    } else if (channel === R.LIST_MATERIALS) {
+      const page = parseContract(z.strictObject({ items: z.array(MaterialRootSchema).max(200), nextCursor: z.string().optional() }), result)
+      if (page.items.length > (input.pageSize as number)) throw new ResearchError('BIO_ACCESS_DENIED')
+      for (const root of page.items) {
+        const authoritative = this.repository.materialRoot(actor, root.id)
+        if (!sameScope(root.scope, input.scope as ResearchScope) || JSON.stringify(root) !== JSON.stringify(authoritative)) throw new ResearchError('BIO_ACCESS_DENIED')
+      }
+    } else if (channel === R.LIST_MATERIAL_DIRECTORY) {
+      const page = parseContract(MaterialPageSchema, result)
+      if (!this.materials || JSON.stringify(page) !== JSON.stringify(this.materials.list(actor, input.rootId as string, input.relativeDir as string, input.pageSize as number, input.cursor as string | undefined))) throw new ResearchError('BIO_ACCESS_DENIED')
+    } else if (channel === R.SEARCH_MATERIAL_TEXT) {
+      if (!this.materials) throw new ResearchError('BIO_ACCESS_DENIED')
+      this.materials.validateSearchResult(actor, input.rootId as string, parseContract(MaterialSearchResultSchema, result))
+    } else if (channel === R.GET_MATERIAL_INDEX) {
+      const state = parseContract(MaterialDirectoryStateSchema, result)
+      if (!this.materials || JSON.stringify(state) !== JSON.stringify(this.materials.indexState(actor, input.rootId as string, input.relativeDir as string))) throw new ResearchError('BIO_ACCESS_DENIED')
+    } else if (channel === R.GET_MATERIAL_ANNOTATION || channel === R.SAVE_MATERIAL_ANNOTATION) {
+      const note = parseContract(MaterialAnnotationSchema, result)
+      if (!this.materials || note.fileId !== input.fileId || JSON.stringify(note) !== JSON.stringify(this.materials.annotation(actor, input.rootId as string,
+        input.relativeDir as string, input.generation as number, input.fileId as string))) throw new ResearchError('BIO_ACCESS_DENIED')
+    } else if (channel === R.INDEX_MATERIAL_DIRECTORY) {
+      const value = parseContract(z.strictObject({ rootId: z.string(), generation: z.number().int().positive() }), result)
+      if (value.rootId !== input.rootId) throw new ResearchError('BIO_ACCESS_DENIED')
+      const state = this.materials?.indexState(actor, input.rootId as string, input.relativeDir as string)
+      if (!state || state.status !== 'complete' || state.generation !== value.generation) throw new ResearchError('BIO_REVISION_CONFLICT')
+    }
     if (channel === R.CREATE_SESSION) {
       const value = parseContract(SessionSchema, result), binding = this.repository.authorizeResource(actor, 'session', value.id, 'write')
       if (value.ownerId !== actor.userId || binding.ownerId !== actor.userId || !sameScope(value.scope, input.scope as ResearchScope) ||

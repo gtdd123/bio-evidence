@@ -98,3 +98,4 @@ credentials.enc
 
 # Runtime JSONL histories belong under the ignored runtime roots above.
 # Synthetic, reviewed source fixtures are not globally ignored.
+.fixtures/

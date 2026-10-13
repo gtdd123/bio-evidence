@@ -12,6 +12,8 @@ import {
   type Actor, type ResearchScope, type ResearchEntity, type ResearchEntityKind,
   type ResearchRepository, type AuthorityUser, type JsonValue, type ProjectionEntry, type ResearchRun, type RunState,
   type EvidenceRevision, type ReportRevision, type AuthorityAuthSession,
+  DeploymentGrantSchema, MaterialRootSchema, MaterialDirectoryStateSchema, IndexedMaterialEntrySchema, MaterialAnnotationSchema,
+  type StoredDeploymentGrant, type MaterialRoot, type MaterialDirectoryState, type IndexedMaterialEntry, type MaterialAnnotation,
 } from '@bio-evidence/research-core';
 import { resolveConfigDir, validateNamespacePath } from '@craft-agent/shared/config/namespace';
 import { INITIAL_SCHEMA, SCHEMA_VERSION } from './schema.ts';
@@ -608,6 +610,147 @@ export class SqliteResearchRepository implements ResearchRepository {
       'SELECT id,actor_id,created_at,action,outcome,resource_id FROM audit WHERE scope_key=? AND id IN(SELECT value FROM json_each(?)) ORDER BY id',
     ).all(scopeKey(scope), JSON.stringify(sequences)).map(row => ({ sequence: row.id, actorId: row.actor_id, createdAt: row.created_at,
       action: row.action, outcome: row.outcome, resourceId: row.resource_id }));
+  }
+  installDeploymentGrants(grants: StoredDeploymentGrant[]): void {
+    const parsed = parseContract(z.array(DeploymentGrantSchema.extend({ authorityHash: z.string().regex(/^[a-f0-9]{64}$/), active: z.boolean() })).max(1000), grants);
+    if (new Set(parsed.map(grant => grant.id)).size !== parsed.length) throw new ResearchError('BIO_INPUT_INVALID');
+    this.db.transaction(() => {
+      this.assertWriter();
+      this.query('UPDATE root_grants SET active=0').run();
+      for (const grant of parsed) {
+        const existing = this.query<{ scope_key: string; root_path: string; authority_hash: string }, [string]>('SELECT * FROM root_grants WHERE id=?').get(grant.id);
+        if (existing && (existing.scope_key !== scopeKey(grant.scope) || existing.root_path !== grant.rootPath || existing.authority_hash !== grant.authorityHash)) {
+          throw new ResearchError('BIO_REVISION_CONFLICT');
+        }
+        this.query('INSERT INTO root_grants VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET active=excluded.active')
+          .run(grant.id, scopeKey(grant.scope), grant.rootPath, grant.authorityHash, Number(grant.active));
+      }
+    }).immediate();
+  }
+  materialGrant(actor: Actor, grantId: string, manage = false): StoredDeploymentGrant {
+    parseContract(IdSchema, grantId);
+    const row = this.query<{ root_path: string; authority_hash: string; active: number; scope_json: string }, [string]>(
+      'SELECT r.root_path,r.authority_hash,r.active,s.scope_json FROM root_grants r JOIN spaces s ON s.scope_key=r.scope_key WHERE r.id=?',
+    ).get(grantId);
+    if (!row || row.active !== 1) throw new ResearchError('BIO_ACCESS_DENIED');
+    const scope = parseContract(ScopeSchema, JSON.parse(row.scope_json));
+    this.authorizeScope(actor, scope, manage ? 'manage' : 'read');
+    return { id: grantId, scope, label: grantId, rootPath: row.root_path, authorityHash: row.authority_hash, active: true };
+  }
+  createMaterialRoot(actor: Actor, input: MaterialRoot): MaterialRoot {
+    const material = parseContract(MaterialRootSchema, input), grant = this.materialGrant(actor, material.grantId, true);
+    if (!sameScope(material.scope, grant.scope)) throw new ResearchError('BIO_ACCESS_DENIED');
+    return this.tx(actor, material.scope, 'material-register', material.id, current => {
+      this.authorize(current, material.scope, 'manage');
+      this.query('INSERT INTO materials VALUES(?,?,?,?)').run(material.id, material.grantId, scopeKey(material.scope), JSON.stringify({ root: material, directories: {} }));
+      return material;
+    });
+  }
+  materialRoot(actor: Actor, rootId: string): MaterialRoot {
+    parseContract(IdSchema, rootId);
+    const row = this.query<{ grant_id: string; scope_json: string; metadata: string }, [string]>(
+      'SELECT m.grant_id,m.metadata,s.scope_json FROM materials m JOIN spaces s ON s.scope_key=m.scope_key WHERE m.id=?',
+    ).get(rootId);
+    if (!row) throw new ResearchError('BIO_ACCESS_DENIED');
+    const scope = parseContract(ScopeSchema, JSON.parse(row.scope_json));
+    this.authorizeScope(actor, scope, 'read'); this.materialGrant(actor, row.grant_id);
+    const root = parseContract(MaterialRootSchema, JSON.parse(row.metadata).root);
+    if (root.id !== rootId || root.grantId !== row.grant_id || !sameScope(root.scope, scope)) throw new ResearchError('BIO_ACCESS_DENIED');
+    return root;
+  }
+  listMaterialRoots(actor: Actor, scope: ResearchScope, pageSize: number, cursor?: string) {
+    this.authorizeScope(actor, scope, 'read');
+    parseContract(z.number().int().min(1).max(200), pageSize); if (cursor) parseContract(IdSchema, cursor);
+    const rows = this.query<{ id: string }, [string, string, number]>(
+      'SELECT m.id FROM materials m JOIN root_grants r ON r.id=m.grant_id WHERE m.scope_key=? AND r.active=1 AND m.id>? ORDER BY m.id LIMIT ?',
+    ).all(scopeKey(scope), cursor ?? '', pageSize + 1);
+    return { items: rows.slice(0, pageSize).map(row => this.materialRoot(actor, row.id)),
+      ...(rows.length > pageSize ? { nextCursor: rows[pageSize - 1]!.id } : {}) };
+  }
+  private updateDirectory(actor: Actor, rootId: string, input: MaterialDirectoryState, begin = false): void {
+    const state = parseContract(MaterialDirectoryStateSchema, input);
+    const material = this.materialRoot(actor, rootId);
+    this.tx(actor, material.scope, 'material-index-state', rootId, current => {
+      this.authorize(current, material.scope, 'read');
+      const row = this.query<{ metadata: string }, [string]>('SELECT metadata FROM materials WHERE id=?').get(rootId)!;
+      const metadata = JSON.parse(row.metadata), previous = metadata.directories[state.key];
+      if (begin ? state.status !== 'indexing' || state.generation !== (previous?.generation ?? 0) + 1 :
+        !previous || previous.generation !== state.generation || previous.status !== 'indexing' || previous.signature !== state.signature || previous.relativeDir !== state.relativeDir) {
+        throw new ResearchError('BIO_REVISION_CONFLICT');
+      }
+      metadata.directories[state.key] = state;
+      this.query('UPDATE materials SET metadata=? WHERE id=?').run(JSON.stringify(metadata), rootId);
+    });
+  }
+  beginMaterialDirectory(actor: Actor, rootId: string, state: MaterialDirectoryState): void { this.updateDirectory(actor, rootId, state, true); }
+  completeMaterialDirectory(actor: Actor, rootId: string, state: MaterialDirectoryState): void { this.updateDirectory(actor, rootId, state); }
+  writeMaterialIndex(actor: Actor, rootId: string, state: MaterialDirectoryState, entries: IndexedMaterialEntry[]): void {
+    parseContract(MaterialDirectoryStateSchema, state);
+    const material = this.materialRoot(actor, rootId);
+    if (entries.length > 200) throw new ResearchError('BIO_INPUT_INVALID');
+    const currentState = this.materialDirectory(actor, rootId, state.key);
+    if (currentState.generation !== state.generation || currentState.status !== 'indexing') throw new ResearchError('BIO_REVISION_CONFLICT');
+    this.tx(actor, material.scope, 'material-index-batch', rootId, current => {
+      this.authorize(current, material.scope, 'read');
+      const stateNow = this.materialDirectory(current, rootId, state.key);
+      if (stateNow.generation !== state.generation || stateNow.status !== 'indexing' || state.status !== 'indexing' || stateNow.signature !== state.signature ||
+        stateNow.relativeDir !== state.relativeDir || state.count !== stateNow.count + entries.length) throw new ResearchError('BIO_REVISION_CONFLICT');
+      for (const input of entries) {
+        const entry = parseContract(IndexedMaterialEntrySchema, input);
+        if (entry.directoryKey !== state.key) throw new ResearchError('BIO_INPUT_INVALID');
+        this.query('INSERT INTO directory_index VALUES(?,?,?,?,?) ON CONFLICT(grant_id,id) DO UPDATE SET relative_path=excluded.relative_path,generation=excluded.generation,metadata=excluded.metadata')
+          .run(material.grantId, entry.id, entry.relativePath, state.generation, JSON.stringify(entry));
+      }
+      const row = this.query<{ metadata: string }, [string]>('SELECT metadata FROM materials WHERE id=?').get(rootId)!;
+      const metadata = JSON.parse(row.metadata); metadata.directories[state.key] = parseContract(MaterialDirectoryStateSchema, state);
+      this.query('UPDATE materials SET metadata=? WHERE id=?').run(JSON.stringify(metadata), rootId);
+    });
+  }
+  materialDirectory(actor: Actor, rootId: string, directoryKey: string): MaterialDirectoryState {
+    this.materialRoot(actor, rootId);
+    const row = this.query<{ metadata: string }, [string]>('SELECT metadata FROM materials WHERE id=?').get(rootId)!;
+    const state = JSON.parse(row.metadata).directories[directoryKey];
+    if (!state) throw new ResearchError('BIO_REVISION_CONFLICT');
+    return parseContract(MaterialDirectoryStateSchema, state);
+  }
+  materialEntries(actor: Actor, rootId: string, directoryKey: string, generation: number, afterSort: string, afterId: string, limit: number): IndexedMaterialEntry[] {
+    const material = this.materialRoot(actor, rootId), state = this.materialDirectory(actor, rootId, directoryKey);
+    if (state.status !== 'complete' || state.generation !== generation) throw new ResearchError('BIO_REVISION_CONFLICT');
+    parseContract(z.number().int().min(1).max(201), limit);
+    return this.query<{ metadata: string }, [string, number, string, string, string, string, number]>(
+      `SELECT metadata FROM directory_index WHERE grant_id=? AND generation=? AND json_extract(metadata,'$.directoryKey')=?
+       AND (json_extract(metadata,'$.sortKey')>? OR (json_extract(metadata,'$.sortKey')=? AND id>?))
+       ORDER BY json_extract(metadata,'$.sortKey'),id LIMIT ?`,
+    ).all(material.grantId, generation, directoryKey, afterSort, afterSort, afterId, limit).map(row => parseContract(IndexedMaterialEntrySchema, JSON.parse(row.metadata)));
+  }
+  materialEntry(actor: Actor, rootId: string, directoryKey: string, generation: number, fileId: string): IndexedMaterialEntry {
+    const material = this.materialRoot(actor, rootId), state = this.materialDirectory(actor, rootId, directoryKey);
+    if (state.status !== 'complete' || state.generation !== generation) throw new ResearchError('BIO_REVISION_CONFLICT');
+    parseContract(IdSchema, fileId);
+    const row = this.query<{ metadata: string; generation: number }, [string, string]>('SELECT metadata,generation FROM directory_index WHERE grant_id=? AND id=?')
+      .get(material.grantId, fileId);
+    if (!row || row.generation !== generation) throw new ResearchError('BIO_ACCESS_DENIED');
+    const entry = parseContract(IndexedMaterialEntrySchema, JSON.parse(row.metadata));
+    if (entry.directoryKey !== directoryKey) throw new ResearchError('BIO_ACCESS_DENIED');
+    return entry;
+  }
+  materialAnnotation(actor: Actor, rootId: string, directoryKey: string, generation: number, fileId: string): MaterialAnnotation {
+    this.materialEntry(actor, rootId, directoryKey, generation, fileId);
+    const row = this.query<{ metadata: string }, [string]>('SELECT metadata FROM materials WHERE id=?').get(rootId)!;
+    return parseContract(MaterialAnnotationSchema, JSON.parse(row.metadata).annotations?.[fileId] ?? { fileId, revision: 0, note: '', tags: [], policy: 'restricted' });
+  }
+  saveMaterialAnnotation(actor: Actor, rootId: string, directoryKey: string, generation: number, input: MaterialAnnotation, expectedRevision: number): MaterialAnnotation {
+    const root = this.materialRoot(actor, rootId), annotation = parseContract(MaterialAnnotationSchema, input);
+    parseContract(GenerationSchema, expectedRevision);
+    return this.tx(actor, root.scope, 'material-annotation-save', rootId, current => {
+      this.authorize(current, root.scope, 'write');
+      const previous = this.materialAnnotation(current, rootId, directoryKey, generation, annotation.fileId);
+      if (previous.revision !== expectedRevision || annotation.revision !== expectedRevision + 1) throw new ResearchError('BIO_REVISION_CONFLICT');
+      const row = this.query<{ metadata: string }, [string]>('SELECT metadata FROM materials WHERE id=?').get(rootId)!;
+      const metadata = JSON.parse(row.metadata); metadata.annotations ??= {}; metadata.annotations[annotation.fileId] = annotation;
+      this.query('UPDATE materials SET metadata=? WHERE id=?').run(JSON.stringify(metadata), rootId);
+      return annotation;
+    });
   }
   counts() {
     return { audit: this.query<{ count: number }, []>('SELECT count(*) AS count FROM audit').get()!.count,

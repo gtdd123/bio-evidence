@@ -8,5 +8,6 @@ export type {
   EvidenceRevision, ReportRevision, Citation, ResearchRun, RunState, ResearchEvent,
   ArticleLicense, RunLease,
   ResearchSpaceView, ResearchMemberView, ResearchAuditEntry,
+  MaterialGrantView, MaterialRoot, MaterialEntry, MaterialPage, MaterialSearchResult, MaterialDirectoryState, MaterialAnnotation,
   ResearchRequestChannel, ResearchRequest, ResearchRpcChannelMap, BioErrorCode,
 } from '@bio-evidence/research-core';

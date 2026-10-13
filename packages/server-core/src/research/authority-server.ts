@@ -4,8 +4,10 @@ import { BioAuthService } from './auth-service'
 import { AuthBoundary } from './auth-http'
 import { createBioAuthNodeAdapter, createBioUserAuthProvider } from './auth-node'
 import type { ResearchRepository } from '@bio-evidence/research-core'
+import type { IncomingMessage, ServerResponse } from 'node:http'
 export interface BioAuthorityServerOptions {
   host?: string; port?: number; publicOrigin?: string; trustedProxies?: readonly string[]; tls?: WsRpcTlsOptions
+  additionalHttpHandler?: (request: IncomingMessage, response: ServerResponse) => boolean
 }
 export async function createBioAuthorityServer(repository: ResearchRepository, options: BioAuthorityServerOptions = {}) {
   const host = options.host ?? '127.0.0.1', port = options.port ?? 9100
@@ -19,8 +21,11 @@ export async function createBioAuthorityServer(repository: ResearchRepository, o
   if (options.tls && !boundary.publicOrigin.startsWith('https:') || !options.tls && boundary.publicOrigin.startsWith('https:') && !options.trustedProxies?.length) {
     throw Error('Public origin must match TLS or an explicitly trusted TLS proxy')
   }
+  const authHandler = createBioAuthNodeAdapter(auth, boundary)
   server = new WsRpcServer({ host, port, tls: options.tls, userAuth: createBioUserAuthProvider(auth, boundary),
-    httpHandler: createBioAuthNodeAdapter(auth, boundary), serverId: 'bioevidence' })
+    httpHandler: (request, response) => {
+      if (!options.additionalHttpHandler?.(request, response)) authHandler(request, response)
+    }, serverId: 'bioevidence' })
   // Start with no legacy handlers. T07 registers and guards approved research
   // channels; the shared Craft token and old login/OAuth routes are unavailable.
   return { server, auth, boundary }

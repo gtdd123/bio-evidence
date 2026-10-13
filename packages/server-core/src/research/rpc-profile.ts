@@ -5,19 +5,37 @@ import { RESEARCH_CHANNELS as R, ResearchError, parseResearchRequest, parseContr
 import type { WsRpcServer } from '../transport/server'
 import type { RequestContext } from '../transport/types'
 import { ResearchAuthorizationGate } from './authorization-gate'
-export function registerResearchRpcProfile(server: WsRpcServer, repository: ResearchRepository) {
-  const gate = new ResearchAuthorizationGate(repository)
+import type { MaterialsService } from './materials-service'
+export function registerResearchRpcProfile(server: WsRpcServer, repository: ResearchRepository, materials?: MaterialsService) {
+  const gate = new ResearchAuthorizationGate(repository, materials)
   server.setAuthorizationGate(gate)
+  const handlers = new Map<string, (current: Actor, input: any) => unknown>()
   const actor = (context: RequestContext): Actor => {
     if (!context.actor) throw new ResearchError('BIO_ACCESS_DENIED')
     return context.actor
   }
   const register = <C extends ResearchRequestChannel>(channel: C, handler: (current: Actor, input: ReturnType<typeof parseResearchRequest<C>>) => unknown) => {
     gate.enable(channel)
+    handlers.set(channel, handler)
     server.handle(channel, (context, ...args) => {
       if (args.length !== 1) throw new ResearchError('BIO_INPUT_INVALID')
       return handler(actor(context), parseResearchRequest(channel, args[0]))
     })
+  }
+  if (materials) {
+    register(R.LIST_MATERIAL_GRANTS, (current, input) => materials.listGrants(current, input.scope))
+    register(R.REGISTER_MATERIAL, (current, input) => materials.registerRoot(current, input.grantId, input.relativeDir))
+    register(R.LIST_MATERIALS, (current, input) => materials.listRoots(current, input.scope, input.pageSize, input.cursor))
+    register(R.GET_MATERIAL, (current, input) => materials.getRoot(current, input.rootId))
+    register(R.INDEX_MATERIAL_DIRECTORY, async (current, input) => {
+      await materials.indexDirectory(current, input.rootId, input.relativeDir)
+      return { rootId: input.rootId, generation: materials.directoryGeneration(current, input.rootId, input.relativeDir) }
+    })
+    register(R.LIST_MATERIAL_DIRECTORY, (current, input) => materials.list(current, input.rootId, input.relativeDir, input.pageSize, input.cursor))
+    register(R.SEARCH_MATERIAL_TEXT, (current, input) => materials.searchText(current, input.rootId, input.query))
+    register(R.GET_MATERIAL_INDEX, (current, input) => materials.indexState(current, input.rootId, input.relativeDir))
+    register(R.GET_MATERIAL_ANNOTATION, (current, input) => materials.annotation(current, input.rootId, input.relativeDir, input.generation, input.fileId))
+    register(R.SAVE_MATERIAL_ANNOTATION, (current, input) => materials.saveAnnotation(current, input.rootId, input.relativeDir, input.generation, input.fileId, input.expectedRevision, input.note, input.tags))
   }
   register(R.LIST_SPACES, current => repository.listSpaces(current))
   register(R.READ_AUDIT, (current, input) => repository.readAudit(current, input.scope, input.pageSize, input.afterSequence))
@@ -49,5 +67,13 @@ export function registerResearchRpcProfile(server: WsRpcServer, repository: Rese
   return {
     gate,
     registerFeature: register,
+    dispatch: async (current: Actor, channel: ResearchRequestChannel, input: unknown, refresh: (actor: Actor) => Actor) => {
+      gate.authorizeRequest(current, channel, [input])
+      const handler = handlers.get(channel)
+      if (!handler) throw new ResearchError('BIO_ACCESS_DENIED')
+      const result = await handler(current, parseResearchRequest(channel, input))
+      const fresh = refresh(current); gate.authorizeResponse(fresh, channel, [input], result)
+      return result
+    },
   }
 }

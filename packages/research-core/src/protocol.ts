@@ -4,12 +4,18 @@ import { IdSchema, IdListSchema, ScopeSchema, RevisionSchema, GenerationSchema, 
   type EvidenceRevision, type ReportRevision, type ResearchRun, type ResearchSource } from './contracts.ts';
 import type { ResearchSpaceView, ResearchMemberView, ResearchAuditEntry } from './repository.ts';
 import { ReportClaimSchema, ReportTitleSchema, nonBlankText } from './contracts.ts';
+import type { MaterialGrantView, MaterialRoot, MaterialPage, MaterialSearchResult, MaterialDirectoryState, MaterialAnnotation } from './materials.ts';
 
 export const RESEARCH_PROTOCOL_VERSION = 1 as const;
 export const RESEARCH_CHANNELS = {
   LIST_SPACES: 'research:v1:listSpaces', CREATE_PROJECT: 'research:v1:createProject',
   LIST_MEMBERS: 'research:v1:listMembers', INVITE_MEMBER: 'research:v1:inviteMember', SET_MEMBER: 'research:v1:setMember',
   READ_AUDIT: 'research:v1:readAudit',
+  LIST_MATERIAL_GRANTS: 'research:v1:listMaterialGrants', REGISTER_MATERIAL: 'research:v1:registerMaterial',
+  LIST_MATERIALS: 'research:v1:listMaterials', GET_MATERIAL: 'research:v1:getMaterial',
+  INDEX_MATERIAL_DIRECTORY: 'research:v1:indexMaterialDirectory', LIST_MATERIAL_DIRECTORY: 'research:v1:listMaterialDirectory',
+  SEARCH_MATERIAL_TEXT: 'research:v1:searchMaterialText',
+  GET_MATERIAL_INDEX: 'research:v1:getMaterialIndex', GET_MATERIAL_ANNOTATION: 'research:v1:getMaterialAnnotation', SAVE_MATERIAL_ANNOTATION: 'research:v1:saveMaterialAnnotation',
   CREATE_SESSION: 'research:v1:createSession', GET_SESSION: 'research:v1:getSession',
   LIST_SESSIONS: 'research:v1:listSessions', SEARCH: 'research:v1:search',
   GET_SNAPSHOT: 'research:v1:getSnapshot', SAVE_EVIDENCE: 'research:v1:saveEvidence',
@@ -19,6 +25,17 @@ export const RESEARCH_CHANNELS = {
 } as const;
 export const CreateSessionSchema = z.strictObject({ scope: ScopeSchema, name: z.string().trim().min(1).max(300), sourceIds: IdListSchema.default([]) });
 export const ResearchRequestSchemas = {
+  [RESEARCH_CHANNELS.LIST_MATERIAL_GRANTS]: z.strictObject({ scope: ScopeSchema }),
+  [RESEARCH_CHANNELS.REGISTER_MATERIAL]: z.strictObject({ grantId: IdSchema, relativeDir: z.string().max(4096).default('') }),
+  [RESEARCH_CHANNELS.LIST_MATERIALS]: z.strictObject({ scope: ScopeSchema, cursor: IdSchema.optional(), pageSize: z.number().int().min(1).max(200).default(100) }),
+  [RESEARCH_CHANNELS.GET_MATERIAL]: z.strictObject({ rootId: IdSchema }),
+  [RESEARCH_CHANNELS.INDEX_MATERIAL_DIRECTORY]: z.strictObject({ rootId: IdSchema, relativeDir: z.string().max(4096).default('') }),
+  [RESEARCH_CHANNELS.LIST_MATERIAL_DIRECTORY]: z.strictObject({ rootId: IdSchema, relativeDir: z.string().max(4096).default(''), cursor: z.string().max(8192).optional(), pageSize: z.number().int().min(1).max(200).default(100) }),
+  [RESEARCH_CHANNELS.SEARCH_MATERIAL_TEXT]: z.strictObject({ rootId: IdSchema, query: z.string().trim().min(1).max(200) }),
+  [RESEARCH_CHANNELS.GET_MATERIAL_INDEX]: z.strictObject({ rootId: IdSchema, relativeDir: z.string().max(4096).default('') }),
+  [RESEARCH_CHANNELS.GET_MATERIAL_ANNOTATION]: z.strictObject({ rootId: IdSchema, relativeDir: z.string().max(4096).default(''), generation: GenerationSchema, fileId: IdSchema }),
+  [RESEARCH_CHANNELS.SAVE_MATERIAL_ANNOTATION]: z.strictObject({ rootId: IdSchema, relativeDir: z.string().max(4096).default(''), generation: GenerationSchema, fileId: IdSchema,
+    expectedRevision: GenerationSchema, note: z.string().max(5000), tags: z.array(z.string().trim().min(1).max(100)).max(20) }),
   [RESEARCH_CHANNELS.LIST_SPACES]: z.strictObject({}),
   [RESEARCH_CHANNELS.READ_AUDIT]: z.strictObject({ scope: ScopeSchema, pageSize: z.number().int().min(1).max(200).default(100), afterSequence: GenerationSchema.default(0) }),
   [RESEARCH_CHANNELS.CREATE_PROJECT]: z.strictObject({ name: z.string().trim().min(1).max(300) }),
@@ -50,6 +67,16 @@ export function parseResearchRequest(channel: string, input: unknown): unknown {
 }
 // Extends the existing typed RPC transport; handlers are registered only after auth integration.
 export interface ResearchRpcChannelMap {
+  'research:v1:listMaterialGrants': { args: [ResearchRequest<'research:v1:listMaterialGrants'>]; result: MaterialGrantView[] };
+  'research:v1:registerMaterial': { args: [ResearchRequest<'research:v1:registerMaterial'>]; result: MaterialRoot };
+  'research:v1:listMaterials': { args: [ResearchRequest<'research:v1:listMaterials'>]; result: { items: MaterialRoot[]; nextCursor?: string } };
+  'research:v1:getMaterial': { args: [ResearchRequest<'research:v1:getMaterial'>]; result: MaterialRoot };
+  'research:v1:indexMaterialDirectory': { args: [ResearchRequest<'research:v1:indexMaterialDirectory'>]; result: { rootId: string; generation: number } };
+  'research:v1:listMaterialDirectory': { args: [ResearchRequest<'research:v1:listMaterialDirectory'>]; result: MaterialPage };
+  'research:v1:searchMaterialText': { args: [ResearchRequest<'research:v1:searchMaterialText'>]; result: MaterialSearchResult };
+  'research:v1:getMaterialIndex': { args: [ResearchRequest<'research:v1:getMaterialIndex'>]; result: MaterialDirectoryState };
+  'research:v1:getMaterialAnnotation': { args: [ResearchRequest<'research:v1:getMaterialAnnotation'>]; result: MaterialAnnotation };
+  'research:v1:saveMaterialAnnotation': { args: [ResearchRequest<'research:v1:saveMaterialAnnotation'>]; result: MaterialAnnotation };
   'research:v1:listSpaces': { args: [ResearchRequest<'research:v1:listSpaces'>]; result: ResearchSpaceView[] };
   'research:v1:readAudit': { args: [ResearchRequest<'research:v1:readAudit'>]; result: ResearchAuditEntry[] };
   'research:v1:createProject': { args: [ResearchRequest<'research:v1:createProject'>]; result: { id: string; name: string; revision: number } };
