@@ -8,8 +8,9 @@ import { ResearchAuthorizationGate } from './authorization-gate'
 import type { MaterialsService } from './materials-service'
 import type { MaterialPreviewService } from './material-preview'
 import type { LiteratureService } from './literature-service'
-export function registerResearchRpcProfile(server: WsRpcServer, repository: ResearchRepository, materials?: MaterialsService, previews?: MaterialPreviewService, literature?: LiteratureService) {
-  const gate = new ResearchAuthorizationGate(repository, materials, previews, literature)
+import type { SourceSnapshotService } from './source-snapshots'
+export function registerResearchRpcProfile(server: WsRpcServer, repository: ResearchRepository, materials?: MaterialsService, previews?: MaterialPreviewService, literature?: LiteratureService, snapshots?: SourceSnapshotService) {
+  const gate = new ResearchAuthorizationGate(repository, materials, previews, literature, snapshots)
   server.setAuthorizationGate(gate)
   const handlers = new Map<string, (current: Actor, input: any) => unknown>()
   const actor = (context: RequestContext): Actor => {
@@ -45,6 +46,10 @@ export function registerResearchRpcProfile(server: WsRpcServer, repository: Rese
     register(R.SELECT_SOURCE, (current, input) => literature.select(current, input))
     register(R.GET_SOURCE, (current, input) => repository.get(current, 'source', input.sourceId))
     register(R.GET_SNAPSHOT, (current, input) => repository.get(current, 'snapshot', input.snapshotId))
+  }
+  if (snapshots) {
+    register(R.READ_SOURCE_TEXT, (current, input) => snapshots.readOpenText(current, input))
+    if (materials) register(R.IMPORT_MATERIAL_PDF, (current, input) => snapshots.importMaterialPdf(current, input))
   }
   register(R.LIST_SPACES, current => repository.listSpaces(current))
   register(R.READ_AUDIT, (current, input) => repository.readAudit(current, input.scope, input.pageSize, input.afterSequence))

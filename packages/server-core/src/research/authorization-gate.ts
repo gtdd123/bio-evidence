@@ -3,7 +3,7 @@ import { RESEARCH_CHANNELS as R, ResearchRequestSchemas, ResearchEventSchema, Re
   parseContract, ScopeSchema, SessionSchema, SourceSchema, EvidenceRevisionSchema, ReportRevisionSchema, sameScope,
   MaterialRootSchema, MaterialGrantViewSchema, MaterialPageSchema, MaterialSearchResultSchema, MaterialDirectoryStateSchema, MaterialAnnotationSchema,
   MaterialImageResultSchema,
-  LiteratureSelectionSchema,
+  LiteratureSelectionSchema, DocumentIngestResultSchema,
   type Actor, type ResearchRepository, type ResearchRequestChannel, type ResearchScope,
 } from '@bio-evidence/research-core'
 import { getAllChannelValues } from '@craft-agent/shared/protocol'
@@ -12,11 +12,12 @@ import type { MaterialsService } from './materials-service'
 import { materialRelativePath } from './material-paths'
 import type { MaterialPreviewService } from './material-preview'
 import type { LiteratureService } from './literature-service'
+import type { SourceSnapshotService } from './source-snapshots'
 
 /** Every new endpoint still uses this common current-authority resolver. */
 export class ResearchAuthorizationGate implements TransportAuthorizationGate {
   private enabled = new Set<ResearchRequestChannel>()
-  constructor(private readonly repository: ResearchRepository, private readonly materials?: MaterialsService, private readonly previews?: MaterialPreviewService, private readonly literature?: LiteratureService) {}
+  constructor(private readonly repository: ResearchRepository, private readonly materials?: MaterialsService, private readonly previews?: MaterialPreviewService, private readonly literature?: LiteratureService, private readonly snapshots?: SourceSnapshotService) {}
   enable(channel: ResearchRequestChannel): void {
     if (!Object.hasOwn(ResearchRequestSchemas, channel)) throw new ResearchError('BIO_ACCESS_DENIED')
     this.enabled.add(channel)
@@ -63,6 +64,19 @@ export class ResearchAuthorizationGate implements TransportAuthorizationGate {
         this.repository.authorizeResource(actor, 'snapshot', input.snapshotId as string, 'read'); return
       case R.GET_SOURCE:
         this.repository.authorizeResource(actor, 'source', input.sourceId as string, 'read'); return
+      case R.READ_SOURCE_TEXT: {
+        if (!this.snapshots || !this.literature) throw new ResearchError('BIO_ACCESS_DENIED')
+        const session = this.literature.assertPublicSession(actor, input.sessionId as string)
+        const source = parseContract(SourceSchema, this.repository.get(actor, 'source', input.sourceId as string))
+        if (!session.selectedSourceIds?.includes(source.id) || !sameScope(source.scope, session.scope) || source.policy !== 'public') throw new ResearchError('BIO_ACCESS_DENIED')
+        return
+      }
+      case R.IMPORT_MATERIAL_PDF: {
+        if (!this.snapshots || !this.materials) throw new ResearchError('BIO_ACCESS_DENIED')
+        const session = this.snapshots.authorizeSession(actor, input.sessionId as string), root = this.materials.getRoot(actor, input.rootId as string)
+        if (!sameScope(session.scope, root.scope)) throw new ResearchError('BIO_ACCESS_DENIED')
+        this.materials.fileEntry(actor, input.rootId as string, input.relativeDir as string, input.generation as number, input.fileId as string); return
+      }
       case R.SELECT_SOURCE:
         if (!this.literature) throw new ResearchError('BIO_ACCESS_DENIED')
         this.literature.assertPublicSession(actor, input.sessionId as string); return
@@ -80,6 +94,12 @@ export class ResearchAuthorizationGate implements TransportAuthorizationGate {
   authorizeResponse(actor: Actor, channel: string, args: unknown[], result: unknown): void {
     this.authorizeRequest(actor, channel, args)
     const input = parseResearchRequest(channel, args[0]) as Record<string, unknown>
+    if (channel === R.READ_SOURCE_TEXT || channel === R.IMPORT_MATERIAL_PDF) {
+      if (!this.snapshots) throw new ResearchError('BIO_ACCESS_DENIED')
+      const parsed = parseContract(DocumentIngestResultSchema, result)
+      this.snapshots.validateResult(actor, input.sessionId as string, parsed)
+      if (parsed.status === 'ok' && (channel === R.READ_SOURCE_TEXT ? parsed.source.id !== input.sourceId || parsed.snapshot.format !== 'jats' : parsed.source.policy !== 'restricted' || parsed.snapshot.acquiredBy !== 'private-pdf')) throw new ResearchError('BIO_ACCESS_DENIED')
+    }
     if (channel === R.GET_MATERIAL_IMAGE) {
       const image = parseContract(MaterialImageResultSchema, result)
       if (!this.previews || image.rootId !== input.rootId || image.fileId !== input.fileId || image.generation !== input.generation || image.frameIndex !== input.frameIndex || image.kind !== input.kind) throw new ResearchError('BIO_ACCESS_DENIED')

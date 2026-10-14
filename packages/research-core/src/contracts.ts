@@ -64,7 +64,8 @@ export type ResearchSource = z.infer<typeof SourceSchema>;
 
 export const LocatorSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('pdf-page'), page: z.number().int().min(1).max(100) }),
-  z.strictObject({ kind: z.literal('jats-paragraph'), paragraphId: IdSchema, section: z.string().max(1000).optional() }),
+  z.strictObject({ kind: z.literal('jats-paragraph'), paragraphId: IdSchema, section: z.string().max(1000).optional(),
+    elementId: z.string().min(1).max(4096).optional(), sectionId: z.string().min(1).max(4096).optional() }),
   z.strictObject({ kind: z.literal('abstract') }),
 ]);
 export const TextBlockSchema = z.strictObject({

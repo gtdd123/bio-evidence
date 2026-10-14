@@ -4,3 +4,4 @@ export * from './protocol.ts';
 export * from './repository.ts';
 export * from './materials.ts';
 export * from './literature.ts';
+export * from './documents.ts';

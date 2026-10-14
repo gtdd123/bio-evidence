@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { ResearchError, SessionSchema, SourceSchema, SnapshotSchema, LiteratureRecordSchema, LiteratureCandidateSchema,
   LiteratureSearchPageSchema, canonicalIdentifiers, parseContract, parseResearchRequest, RESEARCH_CHANNELS as R,
-  sameScope, type Actor, type LiteratureCandidate, type LiteratureSearchPage, type LiteratureSelection, type ResearchSource,
+  sameScope, ParsedDocumentSchema, type ParsedDocumentResult, type Actor, type LiteratureCandidate, type LiteratureSearchPage, type LiteratureSelection, type ResearchSource,
 } from '@bio-evidence/research-core'
 import type { SqliteResearchRepository } from './sqlite-repository'
 import { LiteratureProviderError, type LiteratureProvider } from './literature-provider'
@@ -11,7 +11,7 @@ type SearchInput = { sessionId: string; query: string; cursor?: string; pageSize
 type Ticket = { candidate: LiteratureCandidate; actorId: string; authSessionId: string; expires: number; bytes: number }
 export class LiteratureService {
   // Server-only ingestion seam: the upload/parser stage supplies bytes; no path/URL or client policy is accepted.
-  registerPdf(actor: Actor, input: { sessionId: string; expectedRevision: number; bytes: Uint8Array; declaredPublic?: boolean }) {
+  registerPdf(actor: Actor, input: { sessionId: string; expectedRevision: number; bytes: Uint8Array; declaredPublic?: boolean }, parsed?: Extract<ParsedDocumentResult, { status: 'ok' }>) {
     actor = this.current(actor)
     this.repository.authorizeResource(actor, 'session', input.sessionId, 'execute')
     const session = parseContract(SessionSchema, this.repository.get(actor, 'session', input.sessionId))
@@ -22,13 +22,18 @@ export class LiteratureService {
     const existingPrivate = candidates.some(source => source.policy !== 'public')
     if (existingPrivate && input.declaredPublic) throw new ResearchError('BIO_POLICY_DENIED')
     const existing = candidates.find(source => source.policy === (input.declaredPublic ? 'public' : 'restricted'))
-    if (existing) return { status: 'selected' as const, source: existing,
-      session: this.repository.commitSourceSelection(actor, session.id, input.expectedRevision, existing, false), created: false }
-    const source = parseContract(SourceSchema, { id: randomUUID(), sourceIdentityId: randomUUID(), revision: 1, scope: session.scope,
+    const source = existing ?? parseContract(SourceSchema, { id: randomUUID(), sourceIdentityId: randomUUID(), revision: 1, scope: session.scope,
       provider: 'pdf-import', policy: input.declaredPublic ? 'public' : 'restricted', license: { status: 'unknown' }, identifiers: {}, contentHash, createdAt: now,
       ...(input.declaredPublic ? { declaration: { actorId: actor.userId, declaredAt: now, kind: 'explicit-public-pdf' } } : {}) })
-    const updated = this.repository.commitSourceSelection(actor, session.id, input.expectedRevision, source, true)
-    return { status: 'selected' as const, source, session: updated, created: true }
+    let snapshot: ReturnType<typeof SnapshotSchema.parse> | undefined
+    if (parsed) {
+      const content = parseContract(ParsedDocumentSchema, parsed)
+      if (content.format !== 'pdf') throw new ResearchError('BIO_INPUT_INVALID')
+      snapshot = parseContract(SnapshotSchema, { id: randomUUID(), sourceId: source.id, scope: source.scope, policy: source.policy, license: source.license,
+        contentHash, retrievedAt: now, acquiredBy: source.policy === 'public' ? 'declared-public-pdf' : 'private-pdf', format: content.format, coverage: content.coverage, blocks: content.blocks })
+    }
+    const updated = this.repository.commitSourceSelection(actor, session.id, input.expectedRevision, source, !existing, snapshot)
+    return { status: 'selected' as const, source, session: updated, created: !existing, ...(snapshot ? { snapshot } : {}) }
   }
   copySource(actor: Actor, input: { sessionId: string; expectedRevision: number; sourceId: string }) {
     actor = this.current(actor)

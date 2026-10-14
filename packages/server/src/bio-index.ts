@@ -9,17 +9,21 @@ import { createBioAuthorityServer } from '../../server-core/src/research/authori
 import { registerResearchRpcProfile } from '../../server-core/src/research/rpc-profile'
 import { MaterialsService } from '../../server-core/src/research/materials-service'
 import { loadMaterialGrants } from '../../server-core/src/research/material-grants-config'
-import { MaterialBudgetsSchema, MaterialImageBudgetsSchema, LiteratureBudgetsSchema, ResearchError } from '@bio-evidence/research-core'
+import { MaterialBudgetsSchema, MaterialImageBudgetsSchema, LiteratureBudgetsSchema, DocumentBudgetsSchema, ResearchError } from '@bio-evidence/research-core'
 import { createMaterialsHttpAdapter } from '../../server-core/src/research/materials-http'
 import { MaterialPreviewService } from '../../server-core/src/research/material-preview'
 import { LiteratureService } from '../../server-core/src/research/literature-service'
 import { EuropePmcProvider } from '../../server-core/src/research/literature-provider'
+import { DocumentParseService } from '../../server-core/src/research/document-parse'
+import { SourceSnapshotService } from '../../server-core/src/research/source-snapshots'
+import { createDocumentsHttpAdapter } from '../../server-core/src/research/documents-http'
 const Settings = z.strictObject({ host: z.string().min(1).default('127.0.0.1'), port: z.number().int().min(1).max(65535).default(9100),
   publicOrigin: z.string().url().optional(), trustedProxies: z.array(z.string()).max(32).optional(),
   tls: z.strictObject({ certPath: z.string().min(1), keyPath: z.string().min(1) }).optional(),
   materialBudgets: MaterialBudgetsSchema.optional(),
   imageBudgets: MaterialImageBudgetsSchema.optional(),
   literatureBudgets: LiteratureBudgetsSchema.optional(),
+  documentBudgets: DocumentBudgetsSchema.optional(),
 })
 function readOwnedFile(path: string): string {
   const target = validateNamespacePath(resolve(resolveConfigDir(), path))
@@ -33,7 +37,8 @@ export async function startBioServer() {
   const repository = new SqliteResearchRepository(join(resolveConfigDir(), 'research.sqlite'))
   try {
     let materialHttp: ReturnType<typeof createMaterialsHttpAdapter> | undefined
-    const instance = await createBioAuthorityServer(repository, { ...settings, additionalHttpHandler: (request, response) => materialHttp?.(request, response) ?? false, tls: settings.tls ? {
+    let documentHttp: ReturnType<typeof createDocumentsHttpAdapter> | undefined
+    const instance = await createBioAuthorityServer(repository, { ...settings, additionalHttpHandler: (request, response) => documentHttp?.(request, response) || materialHttp?.(request, response) || false, tls: settings.tls ? {
       cert: readOwnedFile(settings.tls.certPath), key: readOwnedFile(settings.tls.keyPath),
     } : undefined })
     const materials = new MaterialsService(repository, loadMaterialGrants(), { budgets: settings.materialBudgets, currentActor: actor => {
@@ -47,11 +52,17 @@ export async function startBioServer() {
       if (!current || current.userId !== actor.userId) throw new ResearchError('BIO_ACCESS_DENIED')
       return current
     } })
-    const profile = registerResearchRpcProfile(instance.server, repository, materials, previews, literature)
+    const snapshots = new SourceSnapshotService(repository, literature, new DocumentParseService(settings.documentBudgets), { materials, currentActor: actor => {
+      const current = instance.auth.resolveActor(actor.authSessionId)
+      if (!current || current.userId !== actor.userId) throw new ResearchError('BIO_ACCESS_DENIED')
+      return current
+    } })
+    const profile = registerResearchRpcProfile(instance.server, repository, materials, previews, literature, snapshots)
     materialHttp = createMaterialsHttpAdapter(profile, instance.auth, instance.boundary, { materials, previews })
+    documentHttp = createDocumentsHttpAdapter(snapshots, instance.auth, instance.boundary)
     await instance.server.listen()
     let stopPromise: Promise<void> | undefined
-    const stop = () => stopPromise ??= (async () => { instance.server.close(); await previews.close(); repository.close() })()
+    const stop = () => stopPromise ??= (async () => { instance.server.close(); await documentHttp.close(); await snapshots.close(); await previews.close(); repository.close() })()
     return { ...instance, profile, stop }
   } catch (error) { repository.close(); throw error }
 }
