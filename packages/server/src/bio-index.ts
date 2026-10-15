@@ -18,6 +18,12 @@ import { DocumentParseService } from '../../server-core/src/research/document-pa
 import { SourceSnapshotService } from '../../server-core/src/research/source-snapshots'
 import { createDocumentsHttpAdapter } from '../../server-core/src/research/documents-http'
 import { ArtifactsService } from '../../server-core/src/research/artifacts-service'
+import { getCredentialManager } from '@craft-agent/shared/credentials'
+import { ResearchConnectionsService } from '../../server-core/src/research/model-connections'
+import { PublicInputService } from '../../server-core/src/research/public-input'
+import { PublicModelWorkerService } from '../../server-core/src/research/public-model-worker'
+import { PublicModelExecutor } from '../../server-core/src/research/public-model-executor'
+import type { Actor } from '@bio-evidence/research-core'
 const Settings = z.strictObject({ host: z.string().min(1).default('127.0.0.1'), port: z.number().int().min(1).max(65535).default(9100),
   publicOrigin: z.string().url().optional(), trustedProxies: z.array(z.string()).max(32).optional(),
   tls: z.strictObject({ certPath: z.string().min(1), keyPath: z.string().min(1) }).optional(),
@@ -58,13 +64,22 @@ export async function startBioServer() {
       if (!current || current.userId !== actor.userId) throw new ResearchError('BIO_ACCESS_DENIED')
       return current
     } })
-    const profile = registerResearchRpcProfile(instance.server, repository, materials, previews, literature, snapshots, new ArtifactsService(repository))
+    const currentActor = (actor: Actor) => {
+      const current = instance.auth.resolveActor(actor.authSessionId)
+      if (!current || current.userId !== actor.userId) throw new ResearchError('BIO_ACCESS_DENIED')
+      return current
+    }
+    const connections = new ResearchConnectionsService(repository, getCredentialManager(), currentActor)
+    const publicInputs = new PublicInputService(repository, connections.broker, { currentActor })
+    const modelWorker = new PublicModelWorkerService()
+    const modelExecutor = new PublicModelExecutor(repository, publicInputs, connections.broker, modelWorker)
+    const profile = registerResearchRpcProfile(instance.server, repository, materials, previews, literature, snapshots, new ArtifactsService(repository), connections)
     materialHttp = createMaterialsHttpAdapter(profile, instance.auth, instance.boundary, { materials, previews })
     documentHttp = createDocumentsHttpAdapter(snapshots, instance.auth, instance.boundary)
     await instance.server.listen()
     let stopPromise: Promise<void> | undefined
-    const stop = () => stopPromise ??= (async () => { instance.server.close(); await documentHttp.close(); await snapshots.close(); await previews.close(); repository.close() })()
-    return { ...instance, profile, stop }
+    const stop = () => stopPromise ??= (async () => { instance.server.close(); await modelWorker.close(); await documentHttp.close(); await snapshots.close(); await previews.close(); repository.close() })()
+    return { ...instance, profile, stop, research: { connections, publicInputs, modelWorker, modelExecutor } }
   } catch (error) { repository.close(); throw error }
 }
 if (import.meta.main) {

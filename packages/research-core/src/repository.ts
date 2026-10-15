@@ -1,7 +1,8 @@
 import type { Actor, ResearchScope, ResearchSource, ReadingSnapshot, EvidenceRevision, ReportRevision, ResearchSession, ResearchRun, RunState } from './contracts.ts';
 import type { StoredDeploymentGrant, MaterialRoot, MaterialDirectoryState, IndexedMaterialEntry, MaterialAnnotation } from './materials.ts';
-export type ResearchEntityKind = 'source' | 'snapshot' | 'evidence' | 'report' | 'session' | 'run';
-export type ResearchEntity = ResearchSource | ReadingSnapshot | EvidenceRevision | ReportRevision | ResearchSession | ResearchRun;
+import type { ResearchConnectionRecord } from './public-research.ts';
+export type ResearchEntityKind = 'source' | 'snapshot' | 'evidence' | 'report' | 'session' | 'run' | 'connection';
+export type ResearchEntity = ResearchSource | ReadingSnapshot | EvidenceRevision | ReportRevision | ResearchSession | ResearchRun | ResearchConnectionRecord;
 export interface AuthorityUser { id: string; username: string; passwordHash: string; active: boolean; administrator: boolean; revision: number }
 export interface AuthorityAuthSession { id: string; userId: string; tokenHash: string; expiresAt: number }
 export interface PublicAccount { id: string; username: string; administrator: boolean }

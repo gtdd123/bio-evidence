@@ -32,7 +32,7 @@ import {
   createHash,
 } from 'crypto';
 import { execSync } from 'child_process';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, openSync, fsyncSync, closeSync, renameSync } from 'fs';
 import { hostname, userInfo, homedir } from 'os';
 import { join, dirname } from 'path';
 import { CONFIG_DIR } from '../../config/paths.ts';
@@ -131,7 +131,8 @@ export class SecureStorageBackend implements CredentialBackend {
   }
 
   async set(id: CredentialId, credential: StoredCredential): Promise<void> {
-    let store = await this.loadStore();
+    // Keep read/modify/write synchronous so concurrent initial writes cannot lose keys.
+    let store = this.loadStoreSync();
 
     if (!store) {
       // Initialize new store
@@ -312,9 +313,23 @@ export class SecureStorageBackend implements CredentialBackend {
     // Combine all parts
     const fileData = Buffer.concat([header, iv, authTag, ciphertext]);
 
-    // Write with restrictive permissions (owner read/write only)
-    writeFileSync(CREDENTIALS_FILE, fileData, { mode: 0o600 });
-    this.cachedStore = store;
+    // Replace from a fully written sibling; never truncate the only valid copy.
+    const temporary = `${CREDENTIALS_FILE}.${randomBytes(12).toString('hex')}.tmp`;
+    let descriptor: number | undefined;
+    try {
+      descriptor = openSync(temporary, 'wx', 0o600);
+      writeFileSync(descriptor, fileData);
+      fsyncSync(descriptor);
+      closeSync(descriptor); descriptor = undefined;
+      renameSync(temporary, CREDENTIALS_FILE);
+      this.cachedStore = store;
+    } catch (error) {
+      this.cachedStore = null;
+      throw error;
+    } finally {
+      if (descriptor !== undefined) { try { closeSync(descriptor); } catch {} }
+      try { if (existsSync(temporary)) unlinkSync(temporary); } catch {}
+    }
   }
 
   private getEncryptionKey(salt: Buffer): Buffer {

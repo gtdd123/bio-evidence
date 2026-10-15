@@ -269,6 +269,8 @@ export abstract class BaseAgent implements AgentBackend {
   // ============================================================
 
   constructor(config: BackendConfig, defaultModel: string, contextWindow?: number) {
+    // Public research must be routed by the factory before any generic resources or helpers exist.
+    if (config.executionProfile === 'public-research') throw new Error('Public research requires its isolated backend.');
     this.config = config;
     // Use session's workingDirectory if set (user-changeable), fallback to workspace root
     this.workingDirectory = config.session?.workingDirectory ?? config.workspace.rootPath ?? process.cwd();

@@ -237,6 +237,14 @@ export const BIO_ERROR_MESSAGES = {
   BIO_PROVIDER_UNAVAILABLE: 'The literature provider is unavailable.',
   BIO_PROVIDER_BUDGET: 'The literature response exceeds the configured budget.',
   BIO_EXPORT_BUDGET: 'The research artifact or export exceeds the configured budget.',
+  BIO_CONNECTION_INVALID: 'The selected research connection or model is unavailable.',
+  BIO_MODEL_UNAVAILABLE: 'The selected model request could not complete.',
+  BIO_MODEL_AUTH_FAILED: 'The selected model credentials were rejected.',
+  BIO_MODEL_RATE_LIMITED: 'The selected model is rate limited. Retry later.',
+  BIO_MODEL_TIMEOUT: 'The selected model request timed out.',
+  BIO_MODEL_UNSUPPORTED: 'The selected model or endpoint does not support this request.',
+  BIO_MODEL_CANCELLED: 'The selected model request was cancelled.',
+  BIO_MODEL_BUDGET: 'The public model context exceeds the configured budget.',
 } as const;
 export type BioErrorCode = keyof typeof BIO_ERROR_MESSAGES;
 export class ResearchError extends Error {

@@ -6,3 +6,4 @@ export * from './materials.ts';
 export * from './literature.ts';
 export * from './documents.ts';
 export * from './artifacts.ts';
+export * from './public-research.ts';

@@ -10,8 +10,9 @@ import type { MaterialPreviewService } from './material-preview'
 import type { LiteratureService } from './literature-service'
 import type { SourceSnapshotService } from './source-snapshots'
 import type { ArtifactsService } from './artifacts-service'
-export function registerResearchRpcProfile(server: WsRpcServer, repository: ResearchRepository, materials?: MaterialsService, previews?: MaterialPreviewService, literature?: LiteratureService, snapshots?: SourceSnapshotService, artifacts?: ArtifactsService) {
-  const gate = new ResearchAuthorizationGate(repository, materials, previews, literature, snapshots, artifacts)
+import type { ResearchConnectionsService } from './model-connections'
+export function registerResearchRpcProfile(server: WsRpcServer, repository: ResearchRepository, materials?: MaterialsService, previews?: MaterialPreviewService, literature?: LiteratureService, snapshots?: SourceSnapshotService, artifacts?: ArtifactsService, connections?: ResearchConnectionsService) {
+  const gate = new ResearchAuthorizationGate(repository, materials, previews, literature, snapshots, artifacts, connections)
   server.setAuthorizationGate(gate)
   const handlers = new Map<string, (current: Actor, input: any) => unknown>()
   const actor = (context: RequestContext): Actor => {
@@ -25,6 +26,10 @@ export function registerResearchRpcProfile(server: WsRpcServer, repository: Rese
       if (args.length !== 1) throw new ResearchError('BIO_INPUT_INVALID')
       return handler(actor(context), parseResearchRequest(channel, args[0]))
     })
+  }
+  if (connections) {
+    register(R.LIST_MODEL_CONNECTIONS, (current, input) => connections.list(current, input.scope))
+    register(R.SAVE_MODEL_CONNECTION, (current, input) => connections.save(current, input))
   }
   if (materials) {
     register(R.LIST_MATERIAL_GRANTS, (current, input) => materials.listGrants(current, input.scope))

@@ -61,6 +61,7 @@ import {
 } from './internal/runtime-resolver.ts';
 import { anthropicDriver } from './internal/drivers/anthropic.ts';
 import { piDriver } from './internal/drivers/pi.ts';
+import { createPublicResearchBackend } from './public-research.ts';
 
 const DRIVER_REGISTRY: Record<AgentProvider, ProviderDriver> = {
   anthropic: anthropicDriver,
@@ -132,6 +133,7 @@ export function detectProvider(authType: string): AgentProvider {
  * ```
  */
 export function createBackend(config: BackendConfig): AgentBackend {
+  if (config.executionProfile === 'public-research') return createPublicResearchBackend(config);
   switch (config.provider) {
     case 'anthropic':
       // ClaudeAgent implements AgentBackend directly
@@ -164,6 +166,7 @@ export function createBackendFromResolvedContext(args: {
   providerOptions?: BackendProviderOptions;
 }): AgentBackend {
   const { context, coreConfig, hostRuntime, providerOptions } = args;
+  if (coreConfig.executionProfile === 'public-research') return createBackend({ ...coreConfig, provider: context.provider, model: context.resolvedModel, connectionSlug: context.connection?.slug });
   const { driver, resolvedPaths } = resolveDriverRuntime(context.provider, hostRuntime);
 
   const buildArgs = {
@@ -533,6 +536,7 @@ export function createBackendFromConnection(
   hostRuntime?: BackendHostRuntimeContext,
   providerOptions?: BackendProviderOptions,
 ): AgentBackend {
+  if (baseConfig.executionProfile === 'public-research') return createBackend({ ...baseConfig, provider: 'pi', connectionSlug });
   const connection = getLlmConnection(connectionSlug);
   if (!connection) {
     throw new Error(`LLM connection not found: ${connectionSlug}`);

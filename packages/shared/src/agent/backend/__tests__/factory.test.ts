@@ -28,6 +28,7 @@ import {
 } from '../factory.ts';
 import type { BackendConfig } from '../types.ts';
 import type { Workspace, LlmConnection } from '../../../config/storage.ts';
+import { ensureConfigDir } from '../../../config/storage.ts';
 import type { SessionConfig as Session } from '../../../sessions/storage.ts';
 import { ClaudeAgent } from '../../claude-agent.ts';
 import { PiAgent } from '../../pi-agent.ts';
@@ -56,6 +57,7 @@ function createTestSession(): Session {
 }
 
 function createTestConfig(overrides: Partial<BackendConfig> = {}): BackendConfig {
+  ensureConfigDir();
   return {
     provider: 'anthropic',
     workspace: createTestWorkspace(),

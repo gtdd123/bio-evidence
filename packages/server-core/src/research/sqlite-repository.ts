@@ -15,13 +15,14 @@ import {
   DeploymentGrantSchema, MaterialRootSchema, MaterialDirectoryStateSchema, IndexedMaterialEntrySchema, MaterialAnnotationSchema,
   type StoredDeploymentGrant, type MaterialRoot, type MaterialDirectoryState, type IndexedMaterialEntry, type MaterialAnnotation,
   ArtifactPageSchema,
+  ResearchConnectionRecordSchema, type ResearchConnectionRecord,
 } from '@bio-evidence/research-core';
 import { resolveConfigDir, validateNamespacePath } from '@craft-agent/shared/config/namespace';
 import { INITIAL_SCHEMA, SCHEMA_VERSION } from './schema.ts';
 
 const Schemas = { source: SourceSchema, snapshot: SnapshotSchema, evidence: EvidenceRevisionSchema,
-  report: ReportRevisionSchema, session: SessionSchema, run: RunSchema } as const;
-const KindSchema = z.enum(['source', 'snapshot', 'evidence', 'report', 'session', 'run']);
+  report: ReportRevisionSchema, session: SessionSchema, run: RunSchema, connection: ResearchConnectionRecordSchema } as const;
+const KindSchema = z.enum(['source', 'snapshot', 'evidence', 'report', 'session', 'run', 'connection']);
 const UserSchema = z.strictObject({ id: IdSchema, username: z.string().min(1).max(128), passwordHash: z.string().min(1).max(4096),
   active: z.boolean(), administrator: z.boolean(), revision: z.literal(1) });
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
@@ -112,13 +113,13 @@ export class SqliteResearchRepository implements ResearchRepository {
     if (!user?.active || !input.active) throw new ResearchError('BIO_ACCESS_DENIED');
     return { ...input, active: true, administrator: user.administrator === 1 };
   }
-  private tx<T>(input: Actor, scope: ResearchScope | null, action: string, id: string | null, work: (actor: Actor) => T): T {
+  private tx<T>(input: Actor, scope: ResearchScope | null, action: string, id: string | null, work: (actor: Actor) => T, outcome: 'success' | 'failed' = 'success'): T {
     const actor = parseContract(ActorSchema, input);
     try {
       return this.db.transaction(() => {
         this.assertWriter();
         const result = work(this.currentActor(actor));
-        this.audit(actor.userId, scope, action, 'success', id);
+        this.audit(actor.userId, scope, action, outcome, id);
         return result;
       }).immediate();
     } catch (error) {
@@ -382,6 +383,11 @@ export class SqliteResearchRepository implements ResearchRepository {
     parseContract(GenerationSchema, expectedRevision);
     return this.tx(actor, value.scope, `${kind}-write`, value.id, current => {
       this.authorize(current, value.scope, 'write');
+      if (kind === 'connection') {
+        if (!current.administrator) throw new ResearchError('BIO_ACCESS_DENIED');
+        const connection = value as ResearchConnectionRecord;
+        for (const grant of connection.scopes) if (!this.query('SELECT 1 FROM spaces WHERE scope_key=?').get(scopeKey(grant))) throw new ResearchError('BIO_INPUT_INVALID');
+      }
       const entityId = kind === 'evidence' ? (value as z.infer<typeof EvidenceRevisionSchema>).evidenceId :
         kind === 'report' ? (value as z.infer<typeof ReportRevisionSchema>).reportId :
         kind === 'source' ? (value as z.infer<typeof SourceSchema>).sourceIdentityId ?? value.id : value.id;
@@ -457,13 +463,55 @@ export class SqliteResearchRepository implements ResearchRepository {
         const lease = (value as ResearchRun).lease;
         if (lease) this.query('INSERT INTO run_leases VALUES(?,?,?,?)').run(value.id, lease.workerId, lease.generation, lease.expiresAt);
       }
-      this.event(value.scope, kind, value.id, expectedRevision + 1);
+      if (kind !== 'connection') this.event(value.scope, kind, value.id, expectedRevision + 1);
       return value;
     });
   }
   artifactHead(actor: Actor, kind: 'evidence' | 'report', id: string): EvidenceRevision | ReportRevision {
     const authorized = this.authorizeResource(actor, kind, id, 'read');
     return this.get(actor, kind, authorized.id) as EvidenceRevision | ReportRevision;
+  }
+  managedResearchConnection(actor: Actor, id: string): ResearchConnectionRecord | undefined {
+    parseContract(IdSchema, id);
+    return this.tx(actor, { kind: 'personal', ownerId: actor.userId }, 'connection-config-read', id, current => {
+      if (!current.administrator) throw new ResearchError('BIO_ACCESS_DENIED');
+      const row = this.query<{ present: number }, [string]>("SELECT 1 AS present FROM entities WHERE kind='connection' AND id=?").get(id);
+      return row ? parseContract(ResearchConnectionRecordSchema, this.get(current, 'connection', id)) : undefined;
+    });
+  }
+  researchConnectionsForScope(actor: Actor, scope: ResearchScope): ResearchConnectionRecord[] {
+    this.authorizeScope(actor, scope, 'read');
+    const scopeId = scope.kind === 'personal' ? scope.ownerId : scope.projectId;
+    const where = `FROM entities e JOIN users u ON u.id=json_extract(e.payload,'$.scope.ownerId') WHERE e.kind='connection' AND u.active=1 AND u.administrator=1 AND EXISTS
+      (SELECT 1 FROM json_each(e.payload,'$.scopes') g WHERE json_extract(g.value,'$.kind')=? AND coalesce(json_extract(g.value,'$.ownerId'),json_extract(g.value,'$.projectId'))=?)`;
+    const budget = this.query<{ count: number; bytes: number }, [string, string]>(`SELECT count(*) AS count,coalesce(sum(length(CAST(payload AS BLOB))),0) AS bytes ${where}`).get(scope.kind, scopeId)!;
+    if (budget.count > 1000 || budget.bytes > 8 * 1024 * 1024) throw new ResearchError('BIO_CONNECTION_INVALID');
+    return this.query<{ payload: string }, [string, string]>(`SELECT payload ${where} ORDER BY e.id LIMIT 1000`).all(scope.kind, scopeId).map(row => parseContract(ResearchConnectionRecordSchema, JSON.parse(row.payload)));
+  }
+  commitResearchConnection(actor: Actor, record: ResearchConnectionRecord, expectedRevision: number): ResearchConnectionRecord {
+    return this.tx(actor, { kind: 'personal', ownerId: actor.userId }, 'connection-save', record.id, current => {
+      if (!current.administrator) throw new ResearchError('BIO_ACCESS_DENIED');
+      return parseContract(ResearchConnectionRecordSchema, this.put(current, 'connection', record, expectedRevision));
+    });
+  }
+  recordConnectionSaveFailure(actor: Actor, id: string): void {
+    parseContract(IdSchema, id);
+    this.tx(actor, { kind: 'personal', ownerId: actor.userId }, 'connection-save', id, current => {
+      if (!current.administrator) throw new ResearchError('BIO_ACCESS_DENIED');
+    }, 'failed');
+  }
+  hasUnclassifiedProjection(actor: Actor, sessionId: string): boolean {
+    this.authorizeResource(actor, 'session', sessionId, 'execute');
+    // T14 must establish authoritative run provenance before public projection history can be reused.
+    return !!this.query<{ present: number }, [string]>('SELECT 1 AS present FROM projection_journal WHERE session_id=? LIMIT 1').get(sessionId);
+  }
+  recordPublicModelOutcome(actor: Actor, sessionId: string, purpose: 'evidence' | 'report', phase: 'started' | 'finished', outcome: 'success' | 'failed'): void {
+    parseContract(IdSchema, sessionId); parseContract(z.enum(['evidence', 'report']), purpose); parseContract(z.enum(['started', 'finished']), phase); parseContract(z.enum(['success', 'failed']), outcome);
+    let scope: ResearchScope;
+    try { scope = this.binding('session', sessionId); } catch {
+      return this.tx(actor, null, `research-model-${purpose}-${phase}`, null, () => { throw new ResearchError('BIO_ACCESS_DENIED'); });
+    }
+    this.tx(actor, scope, `research-model-${purpose}-${phase}`, sessionId, current => { this.authorizeResource(current, 'session', sessionId, 'execute'); }, outcome);
   }
   artifactOperation<T>(actor: Actor, kind: 'session' | 'source' | 'evidence' | 'report', requestedId: string,
     operation: 'evidence-create' | 'report-create' | 'evidence-save' | 'report-save' | 'evidence-export' | 'report-export' | 'artifact-review' | 'source-metadata-confirm',

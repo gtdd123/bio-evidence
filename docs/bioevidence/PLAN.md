@@ -185,6 +185,10 @@ Pi 的内置 read/bash/edit/write/grep/find/ls、任意网页及代理工具在�
 
 公开上下文使用可配置预算，初始最大 32,000 字符；片段选择结果及未使用范围明确记录，超模型能力时提示减少来源，不声称全篇已交给模型。输出按证据/报告结构验证，invalid JSON、未知引用和不匹配片段不会成为已校验内容。
 
+**T13 接口收敛（2026-10-15，独立审批 PASS）：** 正式服务在 Bio namespace 懒初始化既有 CredentialManager，组装连接、公开输入、worker 与 Executor。配置通过 typed `listModelConnections` / `saveModelConnection` RPC；当前管理员配置、当前获授权成员选择，响应仅提供遮罩后的状态/模型视图，按当前权威版本重新核验。配置与创建者绑定，密钥用 UUID 暂存引用与 DB CAS 切换；加密文件采用同目录完整写入后替换，失败保留旧文件并失效缓存。崩溃后未引用密钥和管理员接管策略留运维收敛，不自动删旧活动引用。
+
+模型输入按逐项 JSON 字符/字节预算早停，权限证明留 hash；每次 SDK 调用再对包含工具结果的完整上下文按所选模型窗口检查。worker 仅传固定安全错误码。Executor 返回未人工核对的结构化候选；T13 不公开裸 generate RPC，T14 从持久 intent/租约入口挂接它，并负责来源可证明的公开投影历史及结果保存。
+
 ## 9. 受控资料与资源预算
 
 `MaterialsService` 使用 grant/rootId、opaque fileId、relativeDir、cursor 与 frameIndex。登记只接受预授予范围，并排除内部账户、凭据、缓存和状态目录；共享物理目录需独立授予，不能以宽父目录涵盖他人资料。

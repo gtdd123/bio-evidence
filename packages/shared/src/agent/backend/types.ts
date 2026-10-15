@@ -167,6 +167,9 @@ export interface BackendHostRuntimeContext {
  * Provider-specific runtime details are resolved by backend drivers internally.
  */
 export interface CoreBackendConfig {
+  executionProfile?: 'public-research';
+  /** Server-owned immutable public capability; never accepted from an RPC DTO. */
+  publicResearchRuntime?: import('./public-research').PublicResearchRuntime;
   /** Workspace configuration */
   workspace: Workspace;
 

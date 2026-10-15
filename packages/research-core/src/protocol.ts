@@ -9,12 +9,14 @@ import type { LiteratureSearchPage, LiteratureSelection } from './literature.ts'
 import type { DocumentIngestResult } from './documents.ts';
 import { CreateEvidenceRequestSchema, SaveEvidenceRequestSchema, CreateReportRequestSchema, SaveReportRequestSchema,
   type EvidenceView, type ReportView, type ArtifactExport, type ArtifactPage } from './artifacts.ts';
+import { SaveResearchConnectionSchema, type ResearchConnectionView } from './public-research.ts';
 
 export const RESEARCH_PROTOCOL_VERSION = 1 as const;
 export const RESEARCH_CHANNELS = {
   LIST_SPACES: 'research:v1:listSpaces', CREATE_PROJECT: 'research:v1:createProject',
   LIST_MEMBERS: 'research:v1:listMembers', INVITE_MEMBER: 'research:v1:inviteMember', SET_MEMBER: 'research:v1:setMember',
   READ_AUDIT: 'research:v1:readAudit',
+  LIST_MODEL_CONNECTIONS: 'research:v1:listModelConnections', SAVE_MODEL_CONNECTION: 'research:v1:saveModelConnection',
   LIST_MATERIAL_GRANTS: 'research:v1:listMaterialGrants', REGISTER_MATERIAL: 'research:v1:registerMaterial',
   LIST_MATERIALS: 'research:v1:listMaterials', GET_MATERIAL: 'research:v1:getMaterial',
   INDEX_MATERIAL_DIRECTORY: 'research:v1:indexMaterialDirectory', LIST_MATERIAL_DIRECTORY: 'research:v1:listMaterialDirectory',
@@ -35,6 +37,8 @@ export const RESEARCH_CHANNELS = {
 } as const;
 export const CreateSessionSchema = z.strictObject({ scope: ScopeSchema, name: z.string().trim().min(1).max(300), sourceIds: IdListSchema.default([]) });
 export const ResearchRequestSchemas = {
+  [RESEARCH_CHANNELS.LIST_MODEL_CONNECTIONS]: z.strictObject({ scope: ScopeSchema }),
+  [RESEARCH_CHANNELS.SAVE_MODEL_CONNECTION]: SaveResearchConnectionSchema,
   [RESEARCH_CHANNELS.GET_MATERIAL_IMAGE]: MaterialImageRequestSchema,
   [RESEARCH_CHANNELS.LIST_MATERIAL_GRANTS]: z.strictObject({ scope: ScopeSchema }),
   [RESEARCH_CHANNELS.REGISTER_MATERIAL]: z.strictObject({ grantId: IdSchema, relativeDir: z.string().max(4096).default('') }),
@@ -92,6 +96,8 @@ export function parseResearchRequest(channel: string, input: unknown): unknown {
 }
 // Extends the existing typed RPC transport; handlers are registered only after auth integration.
 export interface ResearchRpcChannelMap {
+  'research:v1:listModelConnections': { args: [ResearchRequest<'research:v1:listModelConnections'>]; result: ResearchConnectionView[] };
+  'research:v1:saveModelConnection': { args: [ResearchRequest<'research:v1:saveModelConnection'>]; result: ResearchConnectionView };
   'research:v1:getMaterialImage': { args: [ResearchRequest<'research:v1:getMaterialImage'>]; result: MaterialImageResult };
   'research:v1:listMaterialGrants': { args: [ResearchRequest<'research:v1:listMaterialGrants'>]; result: MaterialGrantView[] };
   'research:v1:registerMaterial': { args: [ResearchRequest<'research:v1:registerMaterial'>]; result: MaterialRoot };
