@@ -7,6 +7,8 @@ import { ReportClaimSchema, ReportTitleSchema, nonBlankText } from './contracts.
 import { MaterialImageRequestSchema, type MaterialImageResult, type MaterialGrantView, type MaterialRoot, type MaterialPage, type MaterialSearchResult, type MaterialDirectoryState, type MaterialAnnotation } from './materials.ts';
 import type { LiteratureSearchPage, LiteratureSelection } from './literature.ts';
 import type { DocumentIngestResult } from './documents.ts';
+import { CreateEvidenceRequestSchema, SaveEvidenceRequestSchema, CreateReportRequestSchema, SaveReportRequestSchema,
+  type EvidenceView, type ReportView, type ArtifactExport, type ArtifactPage } from './artifacts.ts';
 
 export const RESEARCH_PROTOCOL_VERSION = 1 as const;
 export const RESEARCH_CHANNELS = {
@@ -23,6 +25,9 @@ export const RESEARCH_CHANNELS = {
   LIST_SESSIONS: 'research:v1:listSessions', SEARCH: 'research:v1:search',
   SELECT_SOURCE: 'research:v1:selectSource', GET_SOURCE: 'research:v1:getSource',
   READ_SOURCE_TEXT: 'research:v1:readSourceText', IMPORT_MATERIAL_PDF: 'research:v1:importMaterialPdf',
+  CREATE_EVIDENCE: 'research:v1:createEvidence', CREATE_REPORT: 'research:v1:createReport', GET_EVIDENCE: 'research:v1:getEvidence', GET_REPORT: 'research:v1:getReport',
+  LIST_ARTIFACTS: 'research:v1:listArtifacts', REVIEW_ARTIFACT: 'research:v1:reviewArtifact', CONFIRM_SOURCE_METADATA: 'research:v1:confirmSourceMetadata',
+  EXPORT_EVIDENCE: 'research:v1:exportEvidence', EXPORT_REPORT: 'research:v1:exportReport',
   GET_SNAPSHOT: 'research:v1:getSnapshot', SAVE_EVIDENCE: 'research:v1:saveEvidence',
   SAVE_REPORT: 'research:v1:saveReport', START_RUN: 'research:v1:startRun',
   CANCEL_RUN: 'research:v1:cancelRun', GET_RUN: 'research:v1:getRun',
@@ -60,8 +65,17 @@ export const ResearchRequestSchemas = {
   [RESEARCH_CHANNELS.READ_SOURCE_TEXT]: z.strictObject({ sessionId: IdSchema, sourceId: IdSchema }),
   [RESEARCH_CHANNELS.IMPORT_MATERIAL_PDF]: z.strictObject({ sessionId: IdSchema, expectedRevision: RevisionSchema, rootId: IdSchema,
     relativeDir: z.string().max(4096).default(''), generation: GenerationSchema, fileId: IdSchema }),
-  [RESEARCH_CHANNELS.SAVE_EVIDENCE]: z.strictObject({ evidenceId: IdSchema, expectedRevision: RevisionSchema, claim: nonBlankText(20000), citations: z.array(CitationSchema).min(1).max(100) }),
-  [RESEARCH_CHANNELS.SAVE_REPORT]: z.strictObject({ reportId: IdSchema, expectedRevision: RevisionSchema, title: ReportTitleSchema, markdown: z.string().max(1000000), evidenceRevisionIds: IdListSchema, claims: z.array(ReportClaimSchema).max(1000).default([]) }),
+  [RESEARCH_CHANNELS.SAVE_EVIDENCE]: SaveEvidenceRequestSchema,
+  [RESEARCH_CHANNELS.SAVE_REPORT]: SaveReportRequestSchema,
+  [RESEARCH_CHANNELS.CREATE_EVIDENCE]: CreateEvidenceRequestSchema,
+  [RESEARCH_CHANNELS.CREATE_REPORT]: CreateReportRequestSchema,
+  [RESEARCH_CHANNELS.GET_EVIDENCE]: z.strictObject({ revisionId: IdSchema }),
+  [RESEARCH_CHANNELS.GET_REPORT]: z.strictObject({ revisionId: IdSchema }),
+  [RESEARCH_CHANNELS.EXPORT_EVIDENCE]: z.strictObject({ revisionId: IdSchema }),
+  [RESEARCH_CHANNELS.EXPORT_REPORT]: z.strictObject({ revisionId: IdSchema }),
+  [RESEARCH_CHANNELS.LIST_ARTIFACTS]: z.strictObject({ sessionId: IdSchema, pageSize: z.number().int().min(1).max(200).default(100), cursor: z.string().max(256).optional() }),
+  [RESEARCH_CHANNELS.REVIEW_ARTIFACT]: z.strictObject({ kind: z.enum(['evidence', 'report']), revisionId: IdSchema, expectedRevision: RevisionSchema, decision: z.enum(['confirmed', 'needs-changes']) }),
+  [RESEARCH_CHANNELS.CONFIRM_SOURCE_METADATA]: z.strictObject({ sourceId: IdSchema, expectedRevision: RevisionSchema }),
   [RESEARCH_CHANNELS.START_RUN]: z.strictObject({ sessionId: IdSchema, expectedRevision: RevisionSchema, connectionId: IdSchema, sourceIds: IdListSchema, question: z.string().trim().min(1).max(20000), operationId: IdSchema }),
   [RESEARCH_CHANNELS.CANCEL_RUN]: z.strictObject({ runId: IdSchema, expectedGeneration: GenerationSchema }),
   [RESEARCH_CHANNELS.GET_RUN]: z.strictObject({ runId: IdSchema }),
@@ -103,6 +117,15 @@ export interface ResearchRpcChannelMap {
   'research:v1:getSource': { args: [ResearchRequest<'research:v1:getSource'>]; result: ResearchSource };
   'research:v1:readSourceText': { args: [ResearchRequest<'research:v1:readSourceText'>]; result: DocumentIngestResult };
   'research:v1:importMaterialPdf': { args: [ResearchRequest<'research:v1:importMaterialPdf'>]; result: DocumentIngestResult };
+  'research:v1:createEvidence': { args: [ResearchRequest<'research:v1:createEvidence'>]; result: EvidenceRevision };
+  'research:v1:createReport': { args: [ResearchRequest<'research:v1:createReport'>]; result: ReportRevision };
+  'research:v1:getEvidence': { args: [ResearchRequest<'research:v1:getEvidence'>]; result: EvidenceView };
+  'research:v1:getReport': { args: [ResearchRequest<'research:v1:getReport'>]; result: ReportView };
+  'research:v1:listArtifacts': { args: [ResearchRequest<'research:v1:listArtifacts'>]; result: ArtifactPage };
+  'research:v1:reviewArtifact': { args: [ResearchRequest<'research:v1:reviewArtifact'>]; result: EvidenceRevision | ReportRevision };
+  'research:v1:confirmSourceMetadata': { args: [ResearchRequest<'research:v1:confirmSourceMetadata'>]; result: ResearchSource };
+  'research:v1:exportEvidence': { args: [ResearchRequest<'research:v1:exportEvidence'>]; result: ArtifactExport };
+  'research:v1:exportReport': { args: [ResearchRequest<'research:v1:exportReport'>]; result: ArtifactExport };
   'research:v1:getSnapshot': { args: [ResearchRequest<'research:v1:getSnapshot'>]; result: ReadingSnapshot };
   'research:v1:saveEvidence': { args: [ResearchRequest<'research:v1:saveEvidence'>]; result: EvidenceRevision };
   'research:v1:saveReport': { args: [ResearchRequest<'research:v1:saveReport'>]; result: ReportRevision };

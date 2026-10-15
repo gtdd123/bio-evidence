@@ -52,6 +52,7 @@ export const SourceSchema = z.strictObject({
   availability: z.strictObject({ abstract: z.boolean().optional(), fullText: z.boolean().optional() }).optional(),
   metadataConflictFields: z.array(z.enum(['title', 'authors', 'year', 'abstract', 'identifiers', 'license', 'provider'])).max(7).optional(),
   declaration: z.strictObject({ actorId: IdSchema, declaredAt: TimestampSchema, kind: z.enum(['explicit-public-pdf', 'public-provider']) }).optional(),
+  metadataReview: z.strictObject({ sourceId: IdSchema, sourceRevision: RevisionSchema, reviewerId: IdSchema, reviewedAt: TimestampSchema }).optional(),
 }).superRefine((value, ctx) => {
   if (Boolean(value.sourceIdentityId) !== Boolean(value.revision) || (!value.revision && value.predecessorId !== undefined) ||
     (value.revision === 1 ? value.predecessorId !== undefined : value.revision !== undefined && !value.predecessorId) ||
@@ -59,6 +60,7 @@ export const SourceSchema = z.strictObject({
       (value.declaration.kind === 'explicit-public-pdf' ? value.provider !== 'pdf-import' : value.provider !== 'europe-pmc'))) {
     ctx.addIssue({ code: 'custom', message: 'Source revision and declaration must match provenance.' });
   }
+  if (value.metadataReview && (value.metadataReview.sourceId !== value.id || value.metadataReview.sourceRevision !== (value.revision ?? 1) || value.metadataReview.reviewedAt < value.createdAt)) ctx.addIssue({ code: 'custom', message: 'Metadata review must bind to this source record.' });
 });
 export type ResearchSource = z.infer<typeof SourceSchema>;
 
@@ -132,28 +134,43 @@ function checkReview(value: Reviewable, ctx: z.RefinementCtx): void {
     ctx.addIssue({ code: 'custom', message: 'Human review must bind to this revision and valid structure.' });
   }
 }
+export const ResearchInputDeclarationSchema = z.strictObject({ actorId: IdSchema, declaredAt: TimestampSchema,
+  kind: z.enum(['explicit-public-edit', 'generated-public-context']) });
+function checkArtifactPolicy(value: { policy?: DataPolicy; declaration?: z.infer<typeof ResearchInputDeclarationSchema>; createdAt: number }, ctx: z.RefinementCtx) {
+  if (value.declaration && (value.policy !== 'public' || value.declaration.declaredAt > value.createdAt)) ctx.addIssue({ code: 'custom', message: 'Public declaration must bind to a public revision.' });
+}
 export const EvidenceRevisionSchema = z.strictObject({
   id: IdSchema, evidenceId: IdSchema, scope: ScopeSchema, revision: RevisionSchema,
+  sessionId: IdSchema.optional(), policy: PolicySchema.optional(), declaration: ResearchInputDeclarationSchema.optional(),
   claim: nonBlankText(20000), citations: z.array(CitationSchema).min(1).max(100),
+  factSummary: z.string().max(20000).optional(), limitations: z.string().max(20000).optional(), missingInformation: z.array(z.string().max(2000)).max(50).optional(),
+  structuralIssues: z.array(z.enum(['excerpt-mismatch', 'block-missing', 'source-metadata-conflict'])).max(3).optional(),
   structuralStatus: z.enum(['pending', 'structure-valid']),
   reviewStatus: z.enum(['unreviewed', 'confirmed', 'needs-changes']),
   review: HumanReviewSchema.optional(),
   authorId: IdSchema, createdAt: TimestampSchema,
-}).superRefine(checkReview);
+}).superRefine((value, ctx) => {
+  checkReview(value, ctx); checkArtifactPolicy(value, ctx);
+  if (value.structuralStatus === 'structure-valid' && value.structuralIssues?.length) ctx.addIssue({ code: 'custom', message: 'Unresolved evidence issues cannot be structure valid.' });
+});
 export type EvidenceRevision = z.infer<typeof EvidenceRevisionSchema>;
 export const ReportClaimSchema = z.strictObject({
   id: IdSchema, text: nonBlankText(20000), evidenceRevisionIds: IdListSchema,
+  isInference: z.boolean().optional(),
 });
 // Structured reports render from the claims that were actually mapped. Free-form
 // edits remain pending until their claims are mapped and checked again.
-export function renderReportMarkdown(report: { title: string; claims: Array<{ text: string; evidenceRevisionIds: string[] }> }): string {
+export function renderReportMarkdown(report: { title: string; claims: Array<{ text: string; evidenceRevisionIds: string[]; isInference?: boolean }> }): string {
   return `# ${report.title}\n\n${report.claims.map(claim =>
-    `${claim.text}\n\n依据：${claim.evidenceRevisionIds.map(id => `[${id}]`).join('、')}`,
+    `${claim.isInference ? '（推断）' : ''}${claim.text}\n\n依据：${claim.evidenceRevisionIds.map(id => `[${id}]`).join('、')}`,
   ).join('\n\n')}`;
 }
 export const ReportRevisionSchema = z.strictObject({
   id: IdSchema, reportId: IdSchema, scope: ScopeSchema, revision: RevisionSchema,
+  sessionId: IdSchema.optional(), policy: PolicySchema.optional(), declaration: ResearchInputDeclarationSchema.optional(),
   title: ReportTitleSchema, markdown: z.string().max(1000000),
+  researchQuestion: z.string().max(20000).optional(), materialScope: z.string().max(20000).optional(), limitations: z.string().max(20000).optional(),
+  missingInformation: z.array(z.string().max(2000)).max(50).optional(),
   evidenceRevisionIds: IdListSchema, structuralStatus: z.enum(['pending', 'structure-valid']),
   claims: z.array(ReportClaimSchema).max(1000).default([]),
   reviewStatus: z.enum(['unreviewed', 'confirmed', 'needs-changes']),
@@ -161,6 +178,7 @@ export const ReportRevisionSchema = z.strictObject({
   authorId: IdSchema, createdAt: TimestampSchema,
 }).superRefine((value, ctx) => {
   checkReview(value, ctx);
+  checkArtifactPolicy(value, ctx);
   const claimIds = new Set(value.claims.map(claim => claim.id));
   const referenced = new Set(value.claims.flatMap(claim => claim.evidenceRevisionIds));
   if (claimIds.size !== value.claims.length ||
@@ -218,6 +236,7 @@ export const BIO_ERROR_MESSAGES = {
   BIO_PROVIDER_TIMEOUT: 'The literature provider timed out. Retry the request.',
   BIO_PROVIDER_UNAVAILABLE: 'The literature provider is unavailable.',
   BIO_PROVIDER_BUDGET: 'The literature response exceeds the configured budget.',
+  BIO_EXPORT_BUDGET: 'The research artifact or export exceeds the configured budget.',
 } as const;
 export type BioErrorCode = keyof typeof BIO_ERROR_MESSAGES;
 export class ResearchError extends Error {

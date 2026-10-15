@@ -17,6 +17,7 @@ import { EuropePmcProvider } from '../../server-core/src/research/literature-pro
 import { DocumentParseService } from '../../server-core/src/research/document-parse'
 import { SourceSnapshotService } from '../../server-core/src/research/source-snapshots'
 import { createDocumentsHttpAdapter } from '../../server-core/src/research/documents-http'
+import { ArtifactsService } from '../../server-core/src/research/artifacts-service'
 const Settings = z.strictObject({ host: z.string().min(1).default('127.0.0.1'), port: z.number().int().min(1).max(65535).default(9100),
   publicOrigin: z.string().url().optional(), trustedProxies: z.array(z.string()).max(32).optional(),
   tls: z.strictObject({ certPath: z.string().min(1), keyPath: z.string().min(1) }).optional(),
@@ -57,7 +58,7 @@ export async function startBioServer() {
       if (!current || current.userId !== actor.userId) throw new ResearchError('BIO_ACCESS_DENIED')
       return current
     } })
-    const profile = registerResearchRpcProfile(instance.server, repository, materials, previews, literature, snapshots)
+    const profile = registerResearchRpcProfile(instance.server, repository, materials, previews, literature, snapshots, new ArtifactsService(repository))
     materialHttp = createMaterialsHttpAdapter(profile, instance.auth, instance.boundary, { materials, previews })
     documentHttp = createDocumentsHttpAdapter(snapshots, instance.auth, instance.boundary)
     await instance.server.listen()

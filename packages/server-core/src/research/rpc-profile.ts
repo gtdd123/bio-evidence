@@ -9,8 +9,9 @@ import type { MaterialsService } from './materials-service'
 import type { MaterialPreviewService } from './material-preview'
 import type { LiteratureService } from './literature-service'
 import type { SourceSnapshotService } from './source-snapshots'
-export function registerResearchRpcProfile(server: WsRpcServer, repository: ResearchRepository, materials?: MaterialsService, previews?: MaterialPreviewService, literature?: LiteratureService, snapshots?: SourceSnapshotService) {
-  const gate = new ResearchAuthorizationGate(repository, materials, previews, literature, snapshots)
+import type { ArtifactsService } from './artifacts-service'
+export function registerResearchRpcProfile(server: WsRpcServer, repository: ResearchRepository, materials?: MaterialsService, previews?: MaterialPreviewService, literature?: LiteratureService, snapshots?: SourceSnapshotService, artifacts?: ArtifactsService) {
+  const gate = new ResearchAuthorizationGate(repository, materials, previews, literature, snapshots, artifacts)
   server.setAuthorizationGate(gate)
   const handlers = new Map<string, (current: Actor, input: any) => unknown>()
   const actor = (context: RequestContext): Actor => {
@@ -50,6 +51,19 @@ export function registerResearchRpcProfile(server: WsRpcServer, repository: Rese
   if (snapshots) {
     register(R.READ_SOURCE_TEXT, (current, input) => snapshots.readOpenText(current, input))
     if (materials) register(R.IMPORT_MATERIAL_PDF, (current, input) => snapshots.importMaterialPdf(current, input))
+  }
+  if (artifacts) {
+    register(R.CREATE_EVIDENCE, (current, input) => artifacts.createEvidence(current, input))
+    register(R.SAVE_EVIDENCE, (current, input) => artifacts.saveEvidence(current, input))
+    register(R.CREATE_REPORT, (current, input) => artifacts.createReport(current, input))
+    register(R.SAVE_REPORT, (current, input) => artifacts.saveReport(current, input))
+    register(R.GET_EVIDENCE, (current, input) => artifacts.evidenceView(current, input.revisionId))
+    register(R.GET_REPORT, (current, input) => artifacts.reportView(current, input.revisionId))
+    register(R.LIST_ARTIFACTS, (current, input) => artifacts.list(current, input.sessionId, input.pageSize, input.cursor))
+    register(R.REVIEW_ARTIFACT, (current, input) => artifacts.review(current, input))
+    register(R.CONFIRM_SOURCE_METADATA, (current, input) => artifacts.confirmSourceMetadata(current, input.sourceId, input.expectedRevision))
+    register(R.EXPORT_EVIDENCE, (current, input) => artifacts.exportEvidence(current, input.revisionId))
+    register(R.EXPORT_REPORT, (current, input) => artifacts.exportReport(current, input.revisionId))
   }
   register(R.LIST_SPACES, current => repository.listSpaces(current))
   register(R.READ_AUDIT, (current, input) => repository.readAudit(current, input.scope, input.pageSize, input.afterSequence))

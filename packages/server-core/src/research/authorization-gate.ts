@@ -3,7 +3,7 @@ import { RESEARCH_CHANNELS as R, ResearchRequestSchemas, ResearchEventSchema, Re
   parseContract, ScopeSchema, SessionSchema, SourceSchema, EvidenceRevisionSchema, ReportRevisionSchema, sameScope,
   MaterialRootSchema, MaterialGrantViewSchema, MaterialPageSchema, MaterialSearchResultSchema, MaterialDirectoryStateSchema, MaterialAnnotationSchema,
   MaterialImageResultSchema,
-  LiteratureSelectionSchema, DocumentIngestResultSchema,
+  LiteratureSelectionSchema, DocumentIngestResultSchema, EvidenceViewSchema, ReportViewSchema, ArtifactExportSchema, ArtifactPageSchema,
   type Actor, type ResearchRepository, type ResearchRequestChannel, type ResearchScope,
 } from '@bio-evidence/research-core'
 import { getAllChannelValues } from '@craft-agent/shared/protocol'
@@ -13,11 +13,12 @@ import { materialRelativePath } from './material-paths'
 import type { MaterialPreviewService } from './material-preview'
 import type { LiteratureService } from './literature-service'
 import type { SourceSnapshotService } from './source-snapshots'
+import type { ArtifactsService } from './artifacts-service'
 
 /** Every new endpoint still uses this common current-authority resolver. */
 export class ResearchAuthorizationGate implements TransportAuthorizationGate {
   private enabled = new Set<ResearchRequestChannel>()
-  constructor(private readonly repository: ResearchRepository, private readonly materials?: MaterialsService, private readonly previews?: MaterialPreviewService, private readonly literature?: LiteratureService, private readonly snapshots?: SourceSnapshotService) {}
+  constructor(private readonly repository: ResearchRepository, private readonly materials?: MaterialsService, private readonly previews?: MaterialPreviewService, private readonly literature?: LiteratureService, private readonly snapshots?: SourceSnapshotService, private readonly artifacts?: ArtifactsService) {}
   enable(channel: ResearchRequestChannel): void {
     if (!Object.hasOwn(ResearchRequestSchemas, channel)) throw new ResearchError('BIO_ACCESS_DENIED')
     this.enabled.add(channel)
@@ -64,6 +65,25 @@ export class ResearchAuthorizationGate implements TransportAuthorizationGate {
         this.repository.authorizeResource(actor, 'snapshot', input.snapshotId as string, 'read'); return
       case R.GET_SOURCE:
         this.repository.authorizeResource(actor, 'source', input.sourceId as string, 'read'); return
+      case R.CREATE_EVIDENCE: case R.CREATE_REPORT: {
+        this.artifactRequest(actor, 'session', input.sessionId as string, channel === R.CREATE_EVIDENCE ? 'evidence-create' : 'report-create')
+        const session = this.repository.authorizeResource(actor, 'session', input.sessionId as string, 'read')
+        this.repository.authorizeScope(actor, session.scope, 'write'); return
+      }
+      case R.LIST_ARTIFACTS:
+        this.repository.authorizeResource(actor, 'session', input.sessionId as string, 'read'); return
+      case R.GET_EVIDENCE: case R.EXPORT_EVIDENCE:
+        if (channel === R.EXPORT_EVIDENCE) this.artifactRequest(actor, 'evidence', input.revisionId as string, 'evidence-export')
+        this.repository.authorizeResource(actor, 'evidence', input.revisionId as string, 'read'); return
+      case R.GET_REPORT: case R.EXPORT_REPORT:
+        if (channel === R.EXPORT_REPORT) this.artifactRequest(actor, 'report', input.revisionId as string, 'report-export')
+        this.repository.authorizeResource(actor, 'report', input.revisionId as string, 'read'); return
+      case R.REVIEW_ARTIFACT:
+        this.artifactRequest(actor, input.kind as 'evidence' | 'report', input.revisionId as string, 'artifact-review')
+        this.repository.authorizeResource(actor, input.kind as 'evidence' | 'report', input.revisionId as string, 'write'); return
+      case R.CONFIRM_SOURCE_METADATA:
+        this.artifactRequest(actor, 'source', input.sourceId as string, 'source-metadata-confirm')
+        this.repository.authorizeResource(actor, 'source', input.sourceId as string, 'write'); return
       case R.READ_SOURCE_TEXT: {
         if (!this.snapshots || !this.literature) throw new ResearchError('BIO_ACCESS_DENIED')
         const session = this.literature.assertPublicSession(actor, input.sessionId as string)
@@ -85,15 +105,39 @@ export class ResearchAuthorizationGate implements TransportAuthorizationGate {
       case R.SEARCH: case R.START_RUN:
         this.repository.authorizeResource(actor, 'session', input.sessionId as string, 'execute'); return
       case R.SAVE_EVIDENCE:
+        this.artifactRequest(actor, 'evidence', input.evidenceId as string, 'evidence-save')
         this.repository.authorizeResource(actor, 'evidence', input.evidenceId as string, 'write'); return
       case R.SAVE_REPORT:
+        this.artifactRequest(actor, 'report', input.reportId as string, 'report-save')
         this.repository.authorizeResource(actor, 'report', input.reportId as string, 'write'); return
       default: throw new ResearchError('BIO_ACCESS_DENIED')
     }
   }
+  private artifactRequest(actor: Actor, kind: 'session' | 'source' | 'evidence' | 'report', id: string, operation: Parameters<ArtifactsService['authorizeOperationRequest']>[3]) {
+    if (!this.artifacts) throw new ResearchError('BIO_ACCESS_DENIED')
+    this.artifacts.authorizeOperationRequest(actor, kind, id, operation)
+  }
   authorizeResponse(actor: Actor, channel: string, args: unknown[], result: unknown): void {
     this.authorizeRequest(actor, channel, args)
     const input = parseResearchRequest(channel, args[0]) as Record<string, unknown>
+    if (([R.GET_EVIDENCE, R.GET_REPORT, R.EXPORT_EVIDENCE, R.EXPORT_REPORT, R.LIST_ARTIFACTS] as string[]).includes(channel)) {
+      if (!this.artifacts) throw new ResearchError('BIO_ACCESS_DENIED')
+      const expected = channel === R.GET_EVIDENCE ? this.artifacts.evidenceView(actor, input.revisionId as string) : channel === R.GET_REPORT ? this.artifacts.reportView(actor, input.revisionId as string) :
+        channel === R.EXPORT_EVIDENCE ? this.artifacts.exportEvidence(actor, input.revisionId as string) : channel === R.EXPORT_REPORT ? this.artifacts.exportReport(actor, input.revisionId as string) : this.artifacts.list(actor, input.sessionId as string, input.pageSize as number, input.cursor as string | undefined)
+      const schema = channel === R.GET_EVIDENCE ? EvidenceViewSchema : channel === R.GET_REPORT ? ReportViewSchema : channel === R.LIST_ARTIFACTS ? ArtifactPageSchema : ArtifactExportSchema
+      parseContract(schema as z.ZodType<unknown>, result)
+      if (JSON.stringify(result) !== JSON.stringify(expected)) throw new ResearchError('BIO_ACCESS_DENIED')
+    }
+    if (channel === R.CREATE_EVIDENCE || channel === R.CREATE_REPORT || channel === R.REVIEW_ARTIFACT) {
+      const kind = channel === R.CREATE_EVIDENCE ? 'evidence' : channel === R.CREATE_REPORT ? 'report' : input.kind as 'evidence' | 'report'
+      const value = kind === 'evidence' ? parseContract(EvidenceRevisionSchema, result) : parseContract(ReportRevisionSchema, result)
+      if (JSON.stringify(value) !== JSON.stringify(this.repository.get(actor, kind, value.id))) throw new ResearchError('BIO_ACCESS_DENIED')
+      if (channel === R.REVIEW_ARTIFACT ? value.id !== input.revisionId || value.reviewStatus !== input.decision : value.sessionId !== input.sessionId || value.authorId !== actor.userId) throw new ResearchError('BIO_ACCESS_DENIED')
+    }
+    if (channel === R.CONFIRM_SOURCE_METADATA) {
+      const source = parseContract(SourceSchema, result)
+      if (source.id !== input.sourceId || source.metadataReview?.reviewerId !== actor.userId || JSON.stringify(source) !== JSON.stringify(this.repository.get(actor, 'source', source.id))) throw new ResearchError('BIO_ACCESS_DENIED')
+    }
     if (channel === R.READ_SOURCE_TEXT || channel === R.IMPORT_MATERIAL_PDF) {
       if (!this.snapshots) throw new ResearchError('BIO_ACCESS_DENIED')
       const parsed = parseContract(DocumentIngestResultSchema, result)
@@ -180,7 +224,9 @@ export class ResearchAuthorizationGate implements TransportAuthorizationGate {
       const requested = (input.evidenceId ?? input.reportId) as string
       const target = this.repository.authorizeResource(actor, kind, requested, 'write')
       const stored = this.repository.authorizeResource(actor, kind, value.id, 'read')
-      if (entityId !== requested || !sameScope(target.scope, stored.scope) || !sameScope(value.scope, stored.scope)) throw new ResearchError('BIO_ACCESS_DENIED')
+      if (entityId !== requested || !sameScope(target.scope, stored.scope) || !sameScope(value.scope, stored.scope) ||
+        value.revision !== (input.expectedRevision as number) + 1 ||
+        JSON.stringify(value) !== JSON.stringify(this.repository.get(actor, kind, value.id))) throw new ResearchError('BIO_ACCESS_DENIED')
     }
     if (channel === R.GET_SESSION || channel === R.GET_SNAPSHOT || channel === R.GET_RUN || channel === R.GET_SOURCE) {
       const kind = channel === R.GET_SESSION ? 'session' : channel === R.GET_SNAPSHOT ? 'snapshot' : channel === R.GET_SOURCE ? 'source' : 'run'

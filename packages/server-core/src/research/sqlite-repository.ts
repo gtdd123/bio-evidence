@@ -5,7 +5,7 @@ import { dirname, relative, resolve, isAbsolute, sep } from 'node:path';
 import { mkdirSync, realpathSync, existsSync, writeFileSync } from 'node:fs';
 import { z } from 'zod';
 import {
-  ActorSchema, ScopeSchema, IdSchema, GenerationSchema, SourceSchema, SnapshotSchema,
+  ActorSchema, ScopeSchema, IdSchema, GenerationSchema, RevisionSchema, SourceSchema, SnapshotSchema,
   EvidenceRevisionSchema, ReportRevisionSchema, SessionSchema, RunSchema, ResearchError,
   parseContract, assertScopeAccess, assertSessionControl, sameScope, assertSnapshotSource, validateCitation,
   mergeSessionPolicy, transitionRun, RunStateSchema,
@@ -14,6 +14,7 @@ import {
   type EvidenceRevision, type ReportRevision, type AuthorityAuthSession,
   DeploymentGrantSchema, MaterialRootSchema, MaterialDirectoryStateSchema, IndexedMaterialEntrySchema, MaterialAnnotationSchema,
   type StoredDeploymentGrant, type MaterialRoot, type MaterialDirectoryState, type IndexedMaterialEntry, type MaterialAnnotation,
+  ArtifactPageSchema,
 } from '@bio-evidence/research-core';
 import { resolveConfigDir, validateNamespacePath } from '@craft-agent/shared/config/namespace';
 import { INITIAL_SCHEMA, SCHEMA_VERSION } from './schema.ts';
@@ -368,7 +369,8 @@ export class SqliteResearchRepository implements ResearchRepository {
       const review = this.query<{ decision: string; reviewer_id: string; reviewed_at: number; revision: number }, [string, string]>(
         'SELECT * FROM reviews WHERE kind=? AND record_id=?',
       ).get(kind, id);
-      if (review) Object.assign(payload, { reviewStatus: review.decision, review: {
+      if (review && kind === 'source') Object.assign(payload, { metadataReview: { sourceId: id, sourceRevision: review.revision, reviewerId: review.reviewer_id, reviewedAt: review.reviewed_at } });
+      else if (review) Object.assign(payload, { reviewStatus: review.decision, review: {
         reviewerId: review.reviewer_id, reviewedAt: review.reviewed_at, revisionId: id, revisionNumber: review.revision,
       } });
       return parseContract(Schemas[kind] as z.ZodType<ResearchEntity>, payload);
@@ -390,6 +392,7 @@ export class SqliteResearchRepository implements ResearchRepository {
       if ('revision' in value && value.revision !== expectedRevision + 1) throw new ResearchError('BIO_REVISION_CONFLICT');
       if (kind === 'source') {
         const source = value as z.infer<typeof SourceSchema>;
+        if (source.metadataReview) throw new ResearchError('BIO_INPUT_INVALID');
         if (source.declaration && source.declaration.actorId !== current.userId) throw new ResearchError('BIO_ACCESS_DENIED');
         if (head && (!source.revision || source.predecessorId !== head.record_id)) throw new ResearchError('BIO_REVISION_CONFLICT');
         if (head) {
@@ -425,16 +428,19 @@ export class SqliteResearchRepository implements ResearchRepository {
         for (const ref of evidence.citations) {
           const snapshot = parseContract(SnapshotSchema, this.get(current, 'snapshot', ref.snapshotId));
           if (!sameScope(snapshot.scope, evidence.scope)) throw new ResearchError('BIO_ACCESS_DENIED');
+          if (evidence.policy === 'public' && snapshot.policy !== 'public') throw new ResearchError('BIO_POLICY_DENIED');
           if (evidence.structuralStatus === 'structure-valid' && validateCitation(snapshot, ref).status !== 'structure-valid') throw new ResearchError('BIO_INPUT_INVALID');
         }
       }
       if (kind === 'report') for (const id of (value as z.infer<typeof ReportRevisionSchema>).evidenceRevisionIds) {
         const evidence = parseContract(EvidenceRevisionSchema, this.get(current, 'evidence', id));
         if (!sameScope(evidence.scope, value.scope)) throw new ResearchError('BIO_ACCESS_DENIED');
+        if ('policy' in value && value.policy === 'public' && evidence.policy !== 'public') throw new ResearchError('BIO_POLICY_DENIED');
         if ('structuralStatus' in value && value.structuralStatus === 'structure-valid' && evidence.structuralStatus !== 'structure-valid') throw new ResearchError('BIO_INPUT_INVALID');
       }
       if (('review' in value && value.review && value.review.reviewerId !== current.userId) ||
           ('authorId' in value && value.authorId !== current.userId)) throw new ResearchError('BIO_ACCESS_DENIED');
+      if ((kind === 'evidence' || kind === 'report') && 'declaration' in value && value.declaration && value.declaration.actorId !== current.userId) throw new ResearchError('BIO_ACCESS_DENIED');
       const oldBinding = this.query<{ scope_key: string }, [string, string]>('SELECT scope_key FROM bindings WHERE kind=? AND id=?').get(kind, value.id);
       if (oldBinding && oldBinding.scope_key !== scopeKey(value.scope)) throw new ResearchError('BIO_ACCESS_DENIED');
       if (oldBinding && ['source', 'snapshot', 'evidence', 'report'].includes(kind)) throw new ResearchError('BIO_REVISION_CONFLICT');
@@ -442,7 +448,7 @@ export class SqliteResearchRepository implements ResearchRepository {
       this.query('INSERT INTO entities VALUES(?,?,?,?) ON CONFLICT(kind,id) DO UPDATE SET payload=excluded.payload')
         .run(kind, value.id, scopeKey(value.scope), JSON.stringify(value));
       this.query('INSERT INTO heads VALUES(?,?,?,?,?) ON CONFLICT(kind,entity_id) DO UPDATE SET record_id=excluded.record_id,revision=excluded.revision,policy=excluded.policy')
-        .run(kind, entityId, value.id, expectedRevision + 1, 'policy' in value ? value.policy : null);
+        .run(kind, entityId, value.id, expectedRevision + 1, ('policy' in value ? value.policy : null) ?? null);
       if (kind === 'snapshot') for (const block of (value as z.infer<typeof SnapshotSchema>).blocks) {
         this.query('INSERT INTO snapshot_blocks VALUES(?,?,?,?,?)').run(value.id, block.id, block.unit, block.text, JSON.stringify(block.locator));
       }
@@ -455,6 +461,81 @@ export class SqliteResearchRepository implements ResearchRepository {
       return value;
     });
   }
+  artifactHead(actor: Actor, kind: 'evidence' | 'report', id: string): EvidenceRevision | ReportRevision {
+    const authorized = this.authorizeResource(actor, kind, id, 'read');
+    return this.get(actor, kind, authorized.id) as EvidenceRevision | ReportRevision;
+  }
+  artifactOperation<T>(actor: Actor, kind: 'session' | 'source' | 'evidence' | 'report', requestedId: string,
+    operation: 'evidence-create' | 'report-create' | 'evidence-save' | 'report-save' | 'evidence-export' | 'report-export' | 'artifact-review' | 'source-metadata-confirm',
+    work: () => T, phase: 'request' | 'operation' = 'operation'): T {
+    parseContract(z.enum(['session', 'source', 'evidence', 'report']), kind); parseContract(IdSchema, requestedId);
+    parseContract(z.enum(['evidence-create', 'report-create', 'evidence-save', 'report-save', 'evidence-export', 'report-export', 'artifact-review', 'source-metadata-confirm']), operation);
+    parseContract(z.enum(['request', 'operation']), phase);
+    const head = kind === 'evidence' || kind === 'report' ? this.query<{ record_id: string }, [string, string]>(
+      'SELECT record_id FROM heads WHERE kind=? AND entity_id=?').get(kind, requestedId) : null;
+    let scope: ResearchScope;
+    try { scope = this.binding(kind, head?.record_id ?? requestedId); } catch {
+      // Unknown IDs stay out of global logs; no user supplied scope or body is trusted.
+      return this.tx(actor, null, `artifact-${operation}-${phase}`, null, () => { throw new ResearchError('BIO_ACCESS_DENIED'); });
+    }
+    return this.tx(actor, scope, `artifact-${operation}-${phase}`, requestedId, current => {
+      this.authorize(current, scope, operation.endsWith('-export') ? 'read' : 'write');
+      return work();
+    });
+  }
+  sourceHeadForRecord(actor: Actor, recordId: string) {
+    const source = parseContract(SourceSchema, this.get(actor, 'source', recordId));
+    const row = this.query<{ record_id: string }, [string]>("SELECT record_id FROM heads WHERE kind='source' AND entity_id=?").get(source.sourceIdentityId ?? source.id);
+    if (!row) throw new ResearchError('BIO_STORAGE_UNAVAILABLE');
+    return parseContract(SourceSchema, this.get(actor, 'source', row.record_id));
+  }
+  listArtifactHeads(actor: Actor, sessionId: string, pageSize: number, cursor?: string) {
+    parseContract(z.number().int().min(1).max(200), pageSize);
+    const session = parseContract(SessionSchema, this.get(actor, 'session', sessionId));
+    let afterId = '', afterKind = '';
+    if (cursor) {
+      let decoded: unknown;
+      try { decoded = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')); } catch { throw new ResearchError('BIO_INPUT_INVALID'); }
+      const page = parseContract(z.strictObject({ sessionId: IdSchema, id: IdSchema, kind: z.enum(['evidence', 'report']) }), decoded);
+      if (page.sessionId !== sessionId) throw new ResearchError('BIO_INPUT_INVALID');
+      afterId = page.id; afterKind = page.kind;
+    }
+    return this.tx(actor, session.scope, 'artifact-list', sessionId, current => {
+      this.authorize(current, session.scope, 'read');
+      const rows = this.query<{ kind: 'evidence' | 'report'; entity_id: string; record_id: string; revision: number; title: string; policy: string; structural: string; human: string; author: string; created: number }, [string, string, string, string, string, number]>(`SELECT h.kind,h.entity_id,h.record_id,h.revision,
+        substr(CASE WHEN h.kind='evidence' THEN json_extract(e.payload,'$.claim') ELSE json_extract(e.payload,'$.title') END,1,300) AS title,
+        coalesce(json_extract(e.payload,'$.policy'),'unknown') AS policy,json_extract(e.payload,'$.structuralStatus') AS structural,
+        coalesce(r.decision,json_extract(e.payload,'$.reviewStatus')) AS human,json_extract(e.payload,'$.authorId') AS author,json_extract(e.payload,'$.createdAt') AS created
+        FROM heads h JOIN entities e ON h.kind=e.kind AND h.record_id=e.id LEFT JOIN reviews r ON r.kind=h.kind AND r.record_id=h.record_id WHERE h.kind IN('evidence','report') AND e.scope_key=? AND json_extract(e.payload,'$.sessionId')=?
+        AND (h.entity_id>? OR (h.entity_id=? AND h.kind>?)) ORDER BY h.entity_id,h.kind LIMIT ?`).all(scopeKey(session.scope), sessionId, afterId, afterId, afterKind, pageSize + 1);
+      const selected = rows.slice(0, pageSize), last = selected.at(-1);
+      return parseContract(ArtifactPageSchema, { items: selected.map(row => {
+        let title = row.title.slice(0,300);
+        if (/[\uD800-\uDBFF]$/.test(title)) title = title.slice(0,-1);
+        return { kind: row.kind, value: { id: row.record_id, entityId: row.entity_id, sessionId, revision: row.revision, title, policy: row.policy,
+          structuralStatus: row.structural, reviewStatus: row.human, authorId: row.author, createdAt: row.created } };
+      }),
+        ...(rows.length > pageSize && last ? { nextCursor: Buffer.from(JSON.stringify({ sessionId, id: last.entity_id, kind: last.kind })).toString('base64url') } : {}) });
+    });
+  }
+  commitArtifact(actor: Actor, kind: 'evidence' | 'report', value: EvidenceRevision | ReportRevision, expectedRevision: number) {
+    if (!value.sessionId) throw new ResearchError('BIO_INPUT_INVALID');
+    return this.tx(actor, value.scope, 'artifact-save', value.id, current => {
+      const session = parseContract(SessionSchema, this.get(current, 'session', value.sessionId!));
+      this.authorize(current, session.scope, 'write');
+      if (!sameScope(session.scope, value.scope)) throw new ResearchError('BIO_ACCESS_DENIED');
+      const saved = this.put(current, kind, value, expectedRevision) as EvidenceRevision | ReportRevision;
+      const policy = mergeSessionPolicy(session.policy, [saved.policy ?? 'unknown']);
+      if (policy !== session.policy) {
+        // Resource classification may only increase. It grants no execution or owner rights.
+        const next = parseContract(SessionSchema, { ...session, policy, revision: session.revision + 1 });
+        this.query("UPDATE entities SET payload=? WHERE kind='session' AND id=?").run(JSON.stringify(next), session.id);
+        this.query("UPDATE heads SET revision=?,policy=? WHERE kind='session' AND entity_id=? AND record_id=?").run(next.revision, policy, session.id, session.id);
+        this.event(session.scope, 'session', session.id, next.revision);
+      }
+      return saved;
+    });
+  }
   sourceHeads(actor: Actor, scope: ResearchScope): z.infer<typeof SourceSchema>[] {
     return this.tx(actor, scope, 'source-list', null, current => {
       this.authorize(current, scope, 'read');
@@ -465,7 +546,10 @@ export class SqliteResearchRepository implements ResearchRepository {
       const rows = this.query<{ payload: string }, [string]>(`SELECT e.payload FROM entities e JOIN heads h
         ON h.kind=e.kind AND h.record_id=e.id WHERE e.kind='source' AND e.scope_key=? ORDER BY e.id LIMIT 10001`).all(scopeKey(scope));
       if (rows.length > 10000) throw new ResearchError('BIO_PROVIDER_BUDGET');
-      return rows.map(row => parseContract(SourceSchema, JSON.parse(row.payload)));
+      return rows.map(row => {
+        const source = parseContract(SourceSchema, JSON.parse(row.payload));
+        return parseContract(SourceSchema, this.get(current, 'source', source.id));
+      });
     });
   }
   abstractSnapshot(actor: Actor, sourceId: string): z.infer<typeof SnapshotSchema> | undefined {
@@ -572,6 +656,19 @@ export class SqliteResearchRepository implements ResearchRepository {
       this.query('UPDATE projection_journal SET projected=1 WHERE session_id=? AND operation_id=?').run(sessionId, operationId);
     });
   }
+  confirmSourceMetadata(actor: Actor, id: string, expectedRevision: number, now: number) {
+    const source = parseContract(SourceSchema, this.get(actor, 'source', id));
+    parseContract(GenerationSchema, now); parseContract(RevisionSchema, expectedRevision);
+    return this.tx(actor, source.scope, 'source-metadata-review', id, current => {
+      this.authorize(current, source.scope, 'write');
+      const value = parseContract(SourceSchema, this.get(current, 'source', id));
+      if ((value.revision ?? 1) !== expectedRevision || value.metadataReview) throw new ResearchError('BIO_REVISION_CONFLICT');
+      if (!value.metadataConflictFields?.length || now < value.createdAt) throw new ResearchError('BIO_INPUT_INVALID');
+      this.query('INSERT INTO reviews VALUES(?,?,?,?,?,?)').run('source', id, 'confirmed', current.userId, now, expectedRevision);
+      this.event(source.scope, 'source-metadata-review', id, expectedRevision);
+      return parseContract(SourceSchema, this.get(current, 'source', id));
+    });
+  }
   reviewRevision(actor: Actor, kind: 'evidence' | 'report', id: string, expectedRevision: number,
     decision: 'confirmed' | 'needs-changes', now: number): EvidenceRevision | ReportRevision {
     parseContract(z.enum(['evidence', 'report']), kind); parseContract(IdSchema, id);
@@ -587,10 +684,11 @@ export class SqliteResearchRepository implements ResearchRepository {
       if (value.revision !== expectedRevision || head?.record_id !== id || head.revision !== expectedRevision) {
         throw new ResearchError('BIO_REVISION_CONFLICT');
       }
+      if (this.query<{ record_id: string }, [string, string]>('SELECT record_id FROM reviews WHERE kind=? AND record_id=?').get(kind, id)) throw new ResearchError('BIO_REVISION_CONFLICT');
       const next = parseContract((kind === 'evidence' ? EvidenceRevisionSchema : ReportRevisionSchema) as z.ZodType<EvidenceRevision | ReportRevision>, {
         ...value, reviewStatus: decision, review: { reviewerId: current.userId, reviewedAt: now, revisionId: id, revisionNumber: expectedRevision },
       });
-      this.query('INSERT INTO reviews VALUES(?,?,?,?,?,?) ON CONFLICT(kind,record_id) DO UPDATE SET decision=excluded.decision,reviewer_id=excluded.reviewer_id,reviewed_at=excluded.reviewed_at,revision=excluded.revision')
+      this.query('INSERT INTO reviews VALUES(?,?,?,?,?,?)')
         .run(kind, id, decision, current.userId, now, expectedRevision);
       this.event(scope, 'human-review', id, expectedRevision);
       return next;
