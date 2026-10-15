@@ -4,7 +4,7 @@
 
 日期：2026-10-09（Asia/Shanghai）
 
-状态：任务清单 2026-10-09 审批 PASS；T00–T09 已完成阶段审批 PASS，T02 完整原基线仍未全绿；T10 本地实现独立审批PASS（公网适配器留T17发布阻断），T11–T12独立审批PASS，进入T13前Windows夹具门槛收敛
+状态：任务清单 2026-10-09 审批 PASS；T00–T09 已完成阶段审批 PASS，T02 完整原基线仍未全绿；T10 本地实现独立审批PASS（公网适配器留T17发布阻断），T11–T12独立审批PASS，T13前Windows夹具门槛独立PASS，T13进入实施
 
 依据：已批准需求、Constitution、Spec 0.1.0、Plan 0.1.0
 
@@ -324,6 +324,6 @@ T00：准备与 neutral 校验完成；独立评判者复跑 4 pass/0 fail 并�
 
 T01：独立评判者复跑 25 pass/0 fail/exit0，关闭 Windows 混合大小写 hook 旁路后审批 PASS。证据：派生仓库 `docs/bioevidence/evidence/T01-isolation.md`。
 
-T02：2026-10-10 独立阶段审批 PASS；完整原基线尚未全绿，依 Plan18 责任门槛收敛。T03：2026-10-10 阶段审批 PASS。T04：2026-10-11 阶段审批 PASS。T05：2026-10-12 独立阶段审批 PASS，最终相关114项通过，见 evidence/T05-persistence.md。T06：2026-10-12 独立阶段审批 PASS，最终相关161项通过，见 evidence/T06-auth.md。T07：2026-10-12 独立两文档与阶段审批PASS，相关184项通过，见 evidence/T07-authorization.md及T07-channel-coverage.md。T08：2026-10-13 独立阶段与文档审批PASS；广相关205项、资料专项22项及新增RPC权限/重启检查通过；评判独立复跑22/0及4/0，证据见 evidence/T08-materials.md。T09：2026-10-13 独立文档与阶段审批PASS；广相关228项、最终专项27项通过，评判独立27/0/232expects/18.33s及领域类型exit0；实际源码服务预览/下载/停止验证通过，evidence/T09-preview.md。T10：2026-10-13 本地实现、文档和责任门槛独立审批PASS；广回归246/0、最终专项39/0，生产Bun公网适配器尚未通过并列T17发布阻断，见evidence/T10-literature.md。T11独立审批PASS。T12：2026-10-15独立Spec/质量/文档审批PASS，作者与评判最终相关97/0/1136expects，正式源码入口完整产物链路通过，见evidence/T12-artifacts.md。当前进入T13前Windows夹具门槛收敛；T13–T18未开始。
+T02：2026-10-10 独立阶段审批 PASS；完整原基线尚未全绿，依 Plan18 责任门槛收敛。T03：2026-10-10 阶段审批 PASS。T04：2026-10-11 阶段审批 PASS。T05：2026-10-12 独立阶段审批 PASS，最终相关114项通过，见 evidence/T05-persistence.md。T06：2026-10-12 独立阶段审批 PASS，最终相关161项通过，见 evidence/T06-auth.md。T07：2026-10-12 独立两文档与阶段审批PASS，相关184项通过，见 evidence/T07-authorization.md及T07-channel-coverage.md。T08：2026-10-13 独立阶段与文档审批PASS；广相关205项、资料专项22项及新增RPC权限/重启检查通过；评判独立复跑22/0及4/0，证据见 evidence/T08-materials.md。T09：2026-10-13 独立文档与阶段审批PASS；广相关228项、最终专项27项通过，评判独立27/0/232expects/18.33s及领域类型exit0；实际源码服务预览/下载/停止验证通过，evidence/T09-preview.md。T10：2026-10-13 本地实现、文档和责任门槛独立审批PASS；广回归246/0、最终专项39/0，生产Bun公网适配器尚未通过并列T17发布阻断，见evidence/T10-literature.md。T11独立审批PASS。T12：2026-10-15独立Spec/质量/文档审批PASS，作者与评判最终相关97/0/1136expects，正式源码入口完整产物链路通过，见evidence/T12-artifacts.md。2026-10-15 T13前Windows 14项夹具门槛独立PASS，完整mode文件444/0/532expects，生产授权零改动，见evidence/T13-prerequisite.md。T13进入实施；T14–T18未开始。
 
 实际每项完成后更新任务状态与其验证记录；文档/接口实质改变再次交独立评判者审批，普通执行证据作为审批记录保留，不形成无限递归的自我审批文档。
