@@ -4,7 +4,7 @@
 
 日期：2026-10-09（Asia/Shanghai）
 
-状态：任务清单 2026-10-09 审批 PASS；T00–T09 已完成阶段审批 PASS，T02 完整原基线仍未全绿；T10 本地实现独立审批PASS（公网适配器留T17发布阻断），T11–T13独立审批PASS，T13前Windows夹具门槛独立PASS；T14准备中
+状态：任务清单 2026-10-09 审批 PASS；T00–T09 已完成阶段审批 PASS，T02 完整原基线仍未全绿；T10 本地实现独立审批PASS（公网适配器留T17发布阻断），T11–T14独立审批PASS，T13前Windows夹具门槛独立PASS；下一步进入T15，真实双端界面和交付仍待验证
 
 依据：已批准需求、Constitution、Spec 0.1.0、Plan 0.1.0
 
@@ -250,6 +250,8 @@
 
 ## T14 — 科研运行与投影、取消、重试和双端状态
 
+**2026-10-16 当前状态：** 持久运行、模型逐次 intent、取消/撤权、重试产物复用、启动/周期投影恢复、SessionManager 和共享客户端状态 adapter 已实现，独立 Spec/质量/五文档及阶段审批 PASS。后端相关回归 405pass/1skip/0fail，后加入 adapter 的受影响回归 56pass/1skip/0fail，独立评判另复跑 adapter 3/0；不把这些记录相加为一次执行。最终类型/源码入口/构建检查通过。见 evidence/T14-research-runs.md。T15 界面尚未接入。
+
 **目标：** 有效租约只有一个，取消/撤权晚到响应不覆盖，恢复真实说明完成/中断。
 
 **范围：** ResearchRunService、SessionManager挂接、outbox、投影journal、运行event DTO与renderer状态adapter。
@@ -263,6 +265,8 @@
 **命令/证据：** run/transport/restart故障集成tests、JSONL与DB结果对账、outbox接收和拒绝记录。
 
 ## T15 — 共享登录、项目和科研界面
+
+**承接 T14 评判建议：** 接线时补选中运行切换、分页、2 MiB 响应拒绝及未知/待恢复状态的界面测试；事件到达与连接恢复只读权威状态，不隐式重发 startRun。
 
 **目标：** Windows桌面和Web同一业务界面完成公开调研及私有浏览。
 
@@ -329,3 +333,5 @@ T01：独立评判者复跑 25 pass/0 fail/exit0，关闭 Windows 混合大小�
 T02：2026-10-10 独立阶段审批 PASS；完整原基线尚未全绿，依 Plan18 责任门槛收敛。T03：2026-10-10 阶段审批 PASS。T04：2026-10-11 阶段审批 PASS。T05：2026-10-12 独立阶段审批 PASS，最终相关114项通过，见 evidence/T05-persistence.md。T06：2026-10-12 独立阶段审批 PASS，最终相关161项通过，见 evidence/T06-auth.md。T07：2026-10-12 独立两文档与阶段审批PASS，相关184项通过，见 evidence/T07-authorization.md及T07-channel-coverage.md。T08：2026-10-13 独立阶段与文档审批PASS；广相关205项、资料专项22项及新增RPC权限/重启检查通过；评判独立复跑22/0及4/0，证据见 evidence/T08-materials.md。T09：2026-10-13 独立文档与阶段审批PASS；广相关228项、最终专项27项通过，评判独立27/0/232expects/18.33s及领域类型exit0；实际源码服务预览/下载/停止验证通过，evidence/T09-preview.md。T10：2026-10-13 本地实现、文档和责任门槛独立审批PASS；广回归246/0、最终专项39/0，生产Bun公网适配器尚未通过并列T17发布阻断，见evidence/T10-literature.md。T11独立审批PASS。T12：2026-10-15独立Spec/质量/文档审批PASS，作者与评判最终相关97/0/1136expects，正式源码入口完整产物链路通过，见evidence/T12-artifacts.md。2026-10-15 T13前Windows 14项夹具门槛独立PASS，完整mode文件444/0/532expects，生产授权零改动，见evidence/T13-prerequisite.md。T13：2026-10-15独立Spec/质量/四文档一致性审批PASS；最终384pass/1skip/0fail/12652expects，正式源码连接/SDK inspect与原产物链路通过，见evidence/T13-public-agent.md。T14准备中；T15–T18未开始。
 
 实际每项完成后更新任务状态与其验证记录；文档/接口实质改变再次交独立评判者审批，普通执行证据作为审批记录保留，不形成无限递归的自我审批文档。
+
+2026-10-16 最新收敛：T14 已独立审批 PASS，授权推进 T15；上段 2026-10-15 记录中的“T14准备中”是当时历史状态。真实模型、公网文献、Windows 包装及 GitHub 交付的责任门槛保留。

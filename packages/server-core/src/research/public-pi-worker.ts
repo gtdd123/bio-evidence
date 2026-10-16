@@ -17,10 +17,11 @@ try {
       const start = parseContract(PublicPiStartSchema, JSON.parse(line)); started = true
       void (async () => {
         const { runPublicPi } = await import('./public-pi-runtime')
-        const text = await runPublicPi(start.job, { inspect: start.mode === 'inspect', authorize: kind => new Promise<void>((resolve, reject) => {
+        const check = (frame: object) => new Promise<void>((resolve, reject) => {
           if (pending.size > 1) { reject(new ResearchError('BIO_MODEL_UNAVAILABLE')); return }
-          const id = randomUUID(); pending.set(id, { resolve, reject: () => reject(new ResearchError('BIO_ACCESS_DENIED')) }); send({ type: 'check', id, kind })
-        }) })
+          const id = randomUUID(); pending.set(id, { resolve, reject: () => reject(new ResearchError('BIO_ACCESS_DENIED')) }); send({ type: 'check', id, ...frame })
+        })
+        const text = await runPublicPi(start.job, { inspect: start.mode === 'inspect', authorize: kind => check({ kind }), attempt: event => check({ kind: 'attempt', attempt: event }) })
         send({ type: 'result', text }); process.exit(0)
       })().catch(fail)
     } else {

@@ -11,10 +11,11 @@ function responses(text: string) {
   return events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join('')
 }
 for (const api of ['openai-responses', 'openai-completions'] as const) test(`actual ${api} SDK adapter sends exactly selected endpoint, key, public context and store:false`, async () => {
-  const original = globalThis.fetch, requests: { url: string; body: any; authorization: string | null }[] = [], text = '{"candidate":"synthetic"}'
+  const original = globalThis.fetch, requests: { url: string; body: any; authorization: string | null }[] = [], trace: string[] = [], text = '{"candidate":"synthetic"}'
   const baseUrl = api === 'openai-responses' ? 'https://api.openai.com/v1' : 'https://compat.invalid/v1'
   try {
     const fake = async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      expect(trace.at(-1)).toBe('send:call-1'); trace.push('http')
       requests.push({ url: String(url), body: JSON.parse(String(init?.body)), authorization: new Headers(init?.headers).get('Authorization') })
       const data = api === 'openai-responses' ? responses(text) : [
         { id: 'chat_synthetic', object: 'chat.completion.chunk', created: 1, model: 'synthetic-gpt', choices: [{ index: 0, delta: { role: 'assistant', content: text }, finish_reason: null }] },
@@ -23,11 +24,23 @@ for (const api of ['openai-responses', 'openai-completions'] as const) test(`act
       return new Response(data, { headers: { 'Content-Type': 'text/event-stream' } })
     }
     globalThis.fetch = Object.assign(fake, { preconnect: original.preconnect }) as typeof fetch
-    const result = await runPublicPi({ purpose: 'evidence', input, apiKey: 'synthetic-selected-key', connection: { api, baseUrl, model: { id: 'synthetic-gpt', contextWindow: 32000, maxOutputTokens: 4096 } } }, { cwd: resolveConfigDir(), authorize: async () => {} })
+    const result = await runPublicPi({ purpose: 'evidence', input, apiKey: 'synthetic-selected-key', connection: { api, baseUrl, model: { id: 'synthetic-gpt', contextWindow: 32000, maxOutputTokens: 4096 } } }, { cwd: resolveConfigDir(), authorize: async () => {}, attempt: async event => { trace.push(`${event.phase}:${event.callId}`) } })
     expect(result).toBe(text); expect(requests).toHaveLength(1)
     expect(requests[0]!.url).toBe(baseUrl + (api === 'openai-responses' ? '/responses' : '/chat/completions'))
     expect(requests[0]!.authorization).toBe('Bearer synthetic-selected-key'); expect(requests[0]!.body.model).toBe('synthetic-gpt'); expect(requests[0]!.body.store).toBe(false)
     expect(JSON.stringify(requests[0]!.body)).toContain('Synthetic evidence'); expect(JSON.stringify(requests[0]!.body)).not.toContain(resolveConfigDir())
+    expect(trace).toEqual(['send:call-1', 'http', 'received:call-1'])
+  } finally { globalThis.fetch = original }
+})
+
+test('failure to persist the actual model-send intent prevents the HTTP request', async () => {
+  const original = globalThis.fetch
+  let requests = 0
+  try {
+    const fake = async () => { requests++; return new Response(responses('synthetic'), { headers: { 'Content-Type': 'text/event-stream' } }) }
+    globalThis.fetch = Object.assign(fake, { preconnect: original.preconnect }) as typeof fetch
+    await expect(runPublicPi({ purpose: 'evidence', input, apiKey: 'synthetic-selected-key', connection: { api: 'openai-responses', baseUrl: 'https://api.openai.com/v1', model: { id: 'synthetic-gpt', contextWindow: 32000, maxOutputTokens: 4096 } } }, { authorize: async () => {}, attempt: async event => { if (event.phase === 'send') throw Error('Synthetic intent store unavailable') } })).rejects.toMatchObject({ code: 'BIO_STORAGE_UNAVAILABLE' })
+    expect(requests).toBe(0)
   } finally { globalThis.fetch = original }
 })
 

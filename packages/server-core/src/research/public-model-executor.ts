@@ -6,6 +6,7 @@ import type { PublicResearchRuntime } from '@craft-agent/shared/agent/backend/pu
 import type { SqliteResearchRepository } from './sqlite-repository'
 import type { PreparedPublicInput, PublicInputService, ResearchConnectionBroker } from './public-input'
 import type { PublicModelWorkerService } from './public-model-worker'
+import type { PublicModelAttempt } from './public-pi-protocol'
 export function validatePublicCandidate(prepared: PreparedPublicInput, purpose: 'evidence' | 'report', text: string): PublicCandidateResult {
   if (Buffer.byteLength(text) > 262144) throw new ResearchError('BIO_MODEL_BUDGET')
   let raw: unknown; try { raw = JSON.parse(text) } catch { throw new ResearchError('BIO_INPUT_INVALID') }
@@ -27,17 +28,26 @@ export function validatePublicCandidate(prepared: PreparedPublicInput, purpose: 
 export class PublicModelExecutor {
   constructor(private readonly repository: SqliteResearchRepository, private readonly inputs: PublicInputService, private readonly broker: ResearchConnectionBroker, private readonly worker: Pick<PublicModelWorkerService, 'run'>) {}
   async generate(actor: Actor, raw: unknown, purpose: 'evidence' | 'report', signal?: AbortSignal): Promise<PublicCandidateResult> {
-    const sessionId = parseContract(IdSchema, raw && typeof raw === 'object' ? (raw as Record<string, unknown>).sessionId : undefined)
+    let prepared: PreparedPublicInput
+    try { prepared = this.inputs.prepare(actor, raw) } catch (error) {
+      const sessionId = parseContract(IdSchema, raw && typeof raw === 'object' ? (raw as Record<string, unknown>).sessionId : undefined)
+      this.repository.recordPublicModelOutcome(actor, sessionId, purpose, 'finished', 'failed')
+      throw error
+    }
+    return this.generatePrepared(actor, prepared, purpose, signal)
+  }
+  async generatePrepared(actor: Actor, prepared: PreparedPublicInput, purpose: 'evidence' | 'report', signal?: AbortSignal, onAttempt?: (event: PublicModelAttempt) => Promise<void>): Promise<PublicCandidateResult> {
+    const sessionId = parseContract(IdSchema, prepared.manifest.sessionId)
     let backend: ReturnType<typeof createBackend> | undefined
     try {
-      const prepared = this.inputs.prepare(actor, raw), controller = new AbortController(), combined = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal
+      const controller = new AbortController(), combined = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal
       let result: PublicCandidateResult | undefined, used = false
       const worker = this.worker, broker = this.broker
       const runtime: PublicResearchRuntime = { model: prepared.connection.model.id, connectionId: prepared.connection.slug, approvedInput: prepared.manifest.id, assertCurrent: prepared.assertCurrent, abort: async () => { controller.abort() }, stream: async function* () {
         if (used || combined.aborted) throw new ResearchError('BIO_MODEL_UNAVAILABLE'); used = true
         prepared.assertCurrent()
         const { apiKey } = await broker.credentials(actor, prepared.manifest.scope, prepared.connection, prepared.assertCurrent)
-        const text = await worker.run(prepared, purpose, apiKey, combined)
+        const text = await worker.run(prepared, purpose, apiKey, combined, 'generate', onAttempt)
         prepared.assertCurrent(); result = validatePublicCandidate(prepared, purpose, text)
         yield { type: 'text_complete', text: JSON.stringify(result) }; yield { type: 'complete' }
       } }

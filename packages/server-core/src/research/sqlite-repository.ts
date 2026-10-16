@@ -6,17 +6,20 @@ import { mkdirSync, realpathSync, existsSync, writeFileSync } from 'node:fs';
 import { z } from 'zod';
 import {
   ActorSchema, ScopeSchema, IdSchema, GenerationSchema, RevisionSchema, SourceSchema, SnapshotSchema,
-  EvidenceRevisionSchema, ReportRevisionSchema, SessionSchema, RunSchema, ResearchError,
+  EvidenceRevisionSchema, ReportRevisionSchema, SessionSchema, RunSchema, ResearchError, BIO_ERROR_MESSAGES,
   parseContract, assertScopeAccess, assertSessionControl, sameScope, assertSnapshotSource, validateCitation,
   mergeSessionPolicy, transitionRun, RunStateSchema,
   type Actor, type ResearchScope, type ResearchEntity, type ResearchEntityKind,
   type ResearchRepository, type AuthorityUser, type JsonValue, type ProjectionEntry, type ResearchRun, type RunState,
-  type EvidenceRevision, type ReportRevision, type AuthorityAuthSession,
+  type EvidenceRevision, type ReportRevision, type AuthorityAuthSession, type ResearchEvent,
   DeploymentGrantSchema, MaterialRootSchema, MaterialDirectoryStateSchema, IndexedMaterialEntrySchema, MaterialAnnotationSchema,
   type StoredDeploymentGrant, type MaterialRoot, type MaterialDirectoryState, type IndexedMaterialEntry, type MaterialAnnotation,
   ArtifactPageSchema,
   ResearchConnectionRecordSchema, type ResearchConnectionRecord,
+  StartResearchRunSchema, PublicInputManifestSchema, ResearchRunViewSchema, type ResearchRunView,
+  PublicModelInputSchema, PublicCandidateResultSchema, type PublicCandidateResult,
 } from '@bio-evidence/research-core';
+import type { PreparedPublicInput } from './public-input.ts';
 import { resolveConfigDir, validateNamespacePath } from '@craft-agent/shared/config/namespace';
 import { INITIAL_SCHEMA, SCHEMA_VERSION } from './schema.ts';
 
@@ -502,8 +505,38 @@ export class SqliteResearchRepository implements ResearchRepository {
   }
   hasUnclassifiedProjection(actor: Actor, sessionId: string): boolean {
     this.authorizeResource(actor, 'session', sessionId, 'execute');
-    // T14 must establish authoritative run provenance before public projection history can be reused.
-    return !!this.query<{ present: number }, [string]>('SELECT 1 AS present FROM projection_journal WHERE session_id=? LIMIT 1').get(sessionId);
+    const budget = this.query<{ count: number; bytes: number }, [string]>('SELECT count(*) AS count,coalesce(sum(length(CAST(payload AS BLOB))),0) AS bytes FROM projection_journal WHERE session_id=?').get(sessionId)!;
+    if (budget.count > 1000 || budget.bytes > 8 * 1024 * 1024) throw new ResearchError('BIO_MODEL_BUDGET');
+    const rows = this.query<{ payload: string; hash: string; operation_id: string }, [string]>('SELECT payload,hash,operation_id FROM projection_journal WHERE session_id=? ORDER BY sequence').all(sessionId);
+    return rows.some(row => !this.provenPublicProjection(actor, sessionId, row));
+  }
+  private provenPublicProjection(actor: Actor, sessionId: string, row: { payload: string; hash: string; operation_id: string }): boolean {
+    if (digest(row.payload) !== row.hash) return false;
+    const proof = this.query<{ payload: string }, [string, string]>(`SELECT p.payload FROM run_steps p JOIN entities r ON r.kind='run' AND r.id=p.run_id
+      WHERE p.run_id=? AND p.step_id='projection-proof' AND p.state='completed' AND json_extract(r.payload,'$.state')='completed' AND json_extract(r.payload,'$.sessionId')=?`).get(row.operation_id, sessionId);
+    if (!proof) return false;
+    const data = JSON.parse(proof.payload), prepare = this.researchRunPreparation(actor, row.operation_id);
+    if (data.hash !== row.hash || data.manifestId !== prepare.manifest.id || !Array.isArray(data.artifacts) || data.artifacts.length !== 1) return false;
+    for (const artifact of data.artifacts) {
+      const stored = this.query<{ payload: string }, [string, string]>('SELECT payload FROM entities WHERE kind=? AND id=?').get(artifact.kind, artifact.id);
+      if (!stored || digest(stored.payload) !== artifact.hash) return false;
+    }
+    return true;
+  }
+  private researchProjectionStatus(actor: Actor, sessionId: string, id: string): 'none' | 'pending' | 'projected' | 'covered' {
+    type Row = { sequence: number; projected: number; operation_id: string; payload: string; hash: string };
+    const own = this.query<Row, [string, string]>('SELECT * FROM projection_journal WHERE session_id=? AND operation_id=?').get(sessionId, id);
+    if (!own) return 'none';
+    if (own.projected) return 'projected';
+    const latest = this.query<Row, [string]>('SELECT * FROM projection_journal WHERE session_id=? ORDER BY sequence DESC LIMIT 1').get(sessionId)!;
+    if (latest.sequence <= own.sequence || !latest.projected || Buffer.byteLength(own.payload) + Buffer.byteLength(latest.payload) > 2 * 1048576) return 'pending';
+    if (!this.provenPublicProjection(actor, sessionId, own) || !this.provenPublicProjection(actor, sessionId, latest)) return 'pending';
+    const before = JSON.parse(own.payload), after = JSON.parse(latest.payload);
+    if (before.format !== 'stored-snapshot' || after.format !== 'stored-snapshot' || before.header.id !== after.header.id || before.header.workspaceRootPath !== after.header.workspaceRootPath ||
+        before.messages.length > after.messages.length || JSON.stringify(before.messages) !== JSON.stringify(after.messages.slice(0, before.messages.length))) return 'pending';
+    // Keep physical per-snapshot receipts intact; a proven newer full snapshot can
+    // nevertheless demonstrate that this run's exact messages reached disk.
+    return 'covered';
   }
   recordPublicModelOutcome(actor: Actor, sessionId: string, purpose: 'evidence' | 'report', phase: 'started' | 'finished', outcome: 'success' | 'failed'): void {
     parseContract(IdSchema, sessionId); parseContract(z.enum(['evidence', 'report']), purpose); parseContract(z.enum(['started', 'finished']), phase); parseContract(z.enum(['success', 'failed']), outcome);
@@ -742,6 +775,240 @@ export class SqliteResearchRepository implements ResearchRepository {
       return next;
     });
   }
+  beginResearchRun(actor: Actor, raw: unknown, prepared?: PreparedPublicInput, now = Date.now()): ResearchRunView {
+    const request = parseContract(StartResearchRunSchema, raw), session = parseContract(SessionSchema, this.get(actor, 'session', request.sessionId));
+    parseContract(GenerationSchema, now);
+    return this.tx(actor, session.scope, 'research-run-create', session.id, current => {
+      this.authorizeResource(current, 'session', session.id, 'execute');
+      const fingerprint = digest(JSON.stringify(request));
+      const previous = this.query<{ run_id: string; fingerprint: string }, [string, string]>(`SELECT i.run_id,i.fingerprint FROM run_intents i JOIN entities e ON e.kind='run' AND e.id=i.run_id
+        WHERE json_extract(e.payload,'$.sessionId')=? AND i.operation_id=?`).get(session.id, request.operationId);
+      if (previous) {
+        if (previous.fingerprint !== fingerprint) throw new ResearchError('BIO_REVISION_CONFLICT');
+        return this.researchRunView(current, previous.run_id);
+      }
+      if (session.revision !== request.expectedRevision) throw new ResearchError('BIO_REVISION_CONFLICT');
+      if (this.query(`SELECT 1 FROM entities WHERE kind='run' AND json_extract(payload,'$.sessionId')=? AND json_extract(payload,'$.state') IN('queued','running')`).get(session.id)) throw new ResearchError('BIO_RUN_ACTIVE');
+      if (!prepared) throw new ResearchError('BIO_INPUT_INVALID');
+      prepared.assertCurrent();
+      const manifest = parseContract(PublicInputManifestSchema, prepared.manifest);
+      const modelInput = parseContract(PublicModelInputSchema, prepared.modelInput);
+      if (manifest.actorId !== current.userId || manifest.sessionId !== session.id || manifest.sessionRevision !== session.revision || !sameScope(manifest.scope, session.scope) || manifest.contextHash !== digest(JSON.stringify(modelInput)) ||
+          manifest.connectionId !== request.connectionId || manifest.model !== request.model || modelInput.question !== request.question ||
+          JSON.stringify(modelInput.blocks.map(({ snapshotId, blockId, start, end }) => ({ snapshotId, blockId, start, end }))) !== JSON.stringify(request.blocks) ||
+          JSON.stringify(modelInput.evidence.map(item => item.id)) !== JSON.stringify(request.evidenceRevisionIds)) throw new ResearchError('BIO_REVISION_CONFLICT');
+      const run = parseContract(RunSchema, { id: randomUUID(), sessionId: session.id, scope: session.scope, actorId: current.userId, connectionId: request.connectionId,
+        state: 'queued', generation: 0, revision: 1, sourceIds: [...new Set(prepared.modelInput.blocks.map(block => block.sourceId))], artifactIds: [], createdAt: now, step: 'prepare' });
+      const payload = JSON.stringify({ request, manifest, modelInput, connectionFingerprint: prepared.connection.fingerprint });
+      if (Buffer.byteLength(payload) > 262144) throw new ResearchError('BIO_MODEL_BUDGET');
+      this.put(current, 'run', run);
+      this.query('INSERT INTO run_steps VALUES(?,?,?,?)').run(run.id, 'prepare', 'completed', payload);
+      this.query('INSERT INTO run_intents VALUES(?,?,?,?)').run(run.id, request.operationId, fingerprint, 'accepted');
+      return this.researchRunView(current, run.id);
+    });
+  }
+  researchRunReplay(actor: Actor, raw: unknown): ResearchRunView | undefined {
+    const request = parseContract(StartResearchRunSchema, raw);
+    this.authorizeResource(actor, 'session', request.sessionId, 'execute');
+    const previous = this.query<{ run_id: string; fingerprint: string }, [string, string]>(`SELECT i.run_id,i.fingerprint FROM run_intents i JOIN entities e ON e.kind='run' AND e.id=i.run_id
+      WHERE json_extract(e.payload,'$.sessionId')=? AND i.operation_id=?`).get(request.sessionId, request.operationId);
+    if (!previous) return undefined;
+    if (previous.fingerprint !== digest(JSON.stringify(request))) throw new ResearchError('BIO_REVISION_CONFLICT');
+    return this.researchRunView(actor, previous.run_id);
+  }
+  researchRunView(actor: Actor, id: string): ResearchRunView {
+    const run = parseContract(RunSchema, this.get(actor, 'run', id));
+    const prepared = this.researchRunPreparation(actor, id), request = prepared.request;
+    const modelRequests = this.query<{ operation_id: string; state: string }, [string]>("SELECT operation_id,state FROM run_intents WHERE run_id=? AND operation_id LIKE 'model:%' ORDER BY operation_id LIMIT 5").all(id)
+      .map(item => ({ callId: item.operation_id.slice(6), state: item.state }));
+    const steps = this.query<{ step_id: string; state: string }, [string]>("SELECT step_id,state FROM run_steps WHERE run_id=? AND step_id!='projection-proof' ORDER BY step_id LIMIT 9").all(id).map(row => ({ id: row.step_id, state: row.state }));
+    const failure = this.query<{ payload: string }, [string]>("SELECT payload FROM run_steps WHERE run_id=? AND step_id='failure'").get(id);
+    const projectionStatus = this.researchProjectionStatus(actor, run.sessionId, id), projectionPending = projectionStatus === 'pending';
+    return parseContract(ResearchRunViewSchema, { run, operationId: request.operationId, purpose: request.purpose, manifest: prepared.manifest, input: prepared.modelInput, modelRequests, steps, projectionPending, projectionStatus,
+      ...(failure ? { errorCode: JSON.parse(failure.payload).errorCode } : {}) });
+  }
+  listResearchRuns(actor: Actor, sessionId: string, pageSize: number, cursor?: string) {
+    parseContract(z.number().int().min(1).max(100), pageSize); if (cursor) parseContract(IdSchema, cursor);
+    const session = parseContract(SessionSchema, this.get(actor, 'session', sessionId));
+    return this.tx(actor, session.scope, 'research-run-list', sessionId, current => {
+      this.authorize(current, session.scope, 'read');
+      const rows = this.query<{ id: string }, [string, string, number]>("SELECT id FROM entities WHERE kind='run' AND json_extract(payload,'$.sessionId')=? AND id>? ORDER BY id LIMIT ?").all(sessionId, cursor ?? '', pageSize + 1);
+      const items = rows.slice(0, pageSize).map(row => parseContract(RunSchema, this.get(current, 'run', row.id)));
+      return { items, ...(rows.length > pageSize ? { nextCursor: items.at(-1)!.id } : {}) };
+    });
+  }
+  researchRunPreparation(actor: Actor, id: string) {
+    this.get(actor, 'run', id);
+    const row = this.query<{ payload: string }, [string]>("SELECT payload FROM run_steps WHERE run_id=? AND step_id='prepare'").get(id);
+    if (!row || Buffer.byteLength(row.payload) > 262144) throw new ResearchError('BIO_STORAGE_UNAVAILABLE');
+    const record = parseContract(z.strictObject({ request: StartResearchRunSchema, manifest: PublicInputManifestSchema, modelInput: PublicModelInputSchema, connectionFingerprint: z.string().regex(/^[a-f0-9]{64}$/) }), JSON.parse(row.payload));
+    if (record.manifest.contextHash !== digest(JSON.stringify(record.modelInput))) throw new ResearchError('BIO_STORAGE_UNAVAILABLE');
+    return record;
+  }
+  /** Service-only authority derived from persisted ownership; never registered as RPC. */
+  researchExecutionActor(id: string): Actor {
+    parseContract(IdSchema, id); this.assertWriter();
+    const row = this.query<{ payload: string }, [string]>("SELECT payload FROM entities WHERE kind='run' AND id=?").get(id);
+    if (!row) throw new ResearchError('BIO_ACCESS_DENIED');
+    const run = parseContract(RunSchema, JSON.parse(row.payload));
+    const actor = this.currentActor({ userId: run.actorId, authSessionId: run.id, administrator: false, active: true });
+    this.authorizeResource(actor, 'session', run.sessionId, 'execute');
+    return actor;
+  }
+  assertResearchRunLease(actor: Actor, id: string, generation: number, workerId: string, now = Date.now()): ResearchRun {
+    const run = parseContract(RunSchema, this.get(actor, 'run', id));
+    this.authorizeResource(actor, 'session', run.sessionId, 'execute');
+    if (actor.userId !== run.actorId || run.state !== 'running' || run.generation !== generation || run.lease?.workerId !== workerId || run.lease.expiresAt <= now) throw new ResearchError('BIO_REVISION_CONFLICT');
+    return run;
+  }
+  recordResearchModelAttempt(actor: Actor, id: string, generation: number, workerId: string, manifestId: string, raw: unknown, now = Date.now()): void {
+    const event = parseContract(z.discriminatedUnion('phase', [z.strictObject({ phase: z.literal('send'), callId: z.string().regex(/^call-[1-4]$/) }),
+      z.strictObject({ phase: z.literal('received'), callId: z.string().regex(/^call-[1-4]$/), outcome: z.enum(['completed', 'rejected']) })]), raw);
+    const scope = this.binding('run', id);
+    this.tx(actor, scope, 'research-model-intent', id, current => {
+      this.assertResearchRunLease(current, id, generation, workerId, now);
+      const { manifest, connectionFingerprint, request } = this.researchRunPreparation(current, id);
+      if (manifest.id !== manifestId) throw new ResearchError('BIO_REVISION_CONFLICT');
+      const fingerprint = digest(JSON.stringify({ manifest, connectionFingerprint, purpose: request.purpose, generation, callId: event.callId })), operation = `model:${event.callId}`;
+      const previous = this.query<{ fingerprint: string; state: string }, [string, string]>('SELECT fingerprint,state FROM run_intents WHERE run_id=? AND operation_id=?').get(id, operation);
+      if (event.phase === 'send') {
+        const count = this.query<{ count: number }, [string]>("SELECT count(*) AS count FROM run_intents WHERE run_id=? AND operation_id LIKE 'model:%'").get(id)!.count;
+        const pending = this.query("SELECT 1 FROM run_intents WHERE run_id=? AND operation_id LIKE 'model:%' AND state IN('pending','unknown')").get(id);
+        if (previous || pending || count >= 4 || event.callId !== `call-${count + 1}`) throw new ResearchError('BIO_REVISION_CONFLICT');
+        this.query('INSERT INTO run_intents VALUES(?,?,?,?)').run(id, operation, fingerprint, 'pending');
+      } else {
+        if (previous?.fingerprint !== fingerprint || previous.state !== 'pending') throw new ResearchError('BIO_REVISION_CONFLICT');
+        this.query('UPDATE run_intents SET state=? WHERE run_id=? AND operation_id=?').run(event.outcome, id, operation);
+      }
+      const run = parseContract(RunSchema, this.get(current, 'run', id));
+      this.event(scope, 'run', id, run.revision);
+    });
+  }
+  researchRetryCandidate(actor: Actor, previousId: string, prepared: PreparedPublicInput, purpose: 'evidence' | 'report'): PublicCandidateResult | undefined {
+    const previous = this.researchRunPreparation(actor, previousId);
+    if (previous.manifest.sessionId !== prepared.manifest.sessionId || !sameScope(previous.manifest.scope, prepared.manifest.scope)) throw new ResearchError('BIO_ACCESS_DENIED');
+    if (previous.manifest.contextHash !== prepared.manifest.contextHash || previous.connectionFingerprint !== prepared.connection.fingerprint || previous.request.purpose !== purpose) return undefined;
+    const row = this.query<{ payload: string }, [string]>("SELECT payload FROM run_steps WHERE run_id=? AND step_id='model-result' AND state='completed'").get(previousId);
+    if (!row) return undefined;
+    if (Buffer.byteLength(row.payload) > 262144) throw new ResearchError('BIO_MODEL_BUDGET');
+    return parseContract(PublicCandidateResultSchema, JSON.parse(row.payload));
+  }
+  saveResearchCandidate(actor: Actor, id: string, generation: number, workerId: string, raw: PublicCandidateResult, prepared: PreparedPublicInput, reusedFrom?: string): void {
+    this.tx(actor, this.binding('run', id), 'research-model-result', id, current => {
+      this.assertResearchRunLease(current, id, generation, workerId);
+      const candidate = parseContract(PublicCandidateResultSchema, raw), record = this.researchRunPreparation(current, id);
+      if (record.manifest.id !== prepared.manifest.id || record.manifest.contextHash !== prepared.manifest.contextHash || candidate.kind !== record.request.purpose) throw new ResearchError('BIO_REVISION_CONFLICT');
+      const unsettled = this.query("SELECT 1 FROM run_intents WHERE run_id=? AND operation_id LIKE 'model:%' AND state IN('pending','unknown')").get(id);
+      const received = this.query("SELECT 1 FROM run_intents WHERE run_id=? AND operation_id LIKE 'model:%' AND state='completed'").get(id);
+      if (unsettled || (!received && (!reusedFrom || JSON.stringify(this.researchRetryCandidate(current, reusedFrom, prepared, record.request.purpose)) !== JSON.stringify(candidate)))) throw new ResearchError('BIO_REVISION_CONFLICT');
+      const payload = JSON.stringify(candidate);
+      if (Buffer.byteLength(payload) > 262144) throw new ResearchError('BIO_MODEL_BUDGET');
+      this.query('INSERT INTO run_steps VALUES(?,?,?,?)').run(id, 'model-result', 'completed', payload);
+      if (reusedFrom) this.query('INSERT INTO run_steps VALUES(?,?,?,?)').run(id, 'reuse', 'completed', JSON.stringify({ runId: reusedFrom }));
+    });
+  }
+  researchRetryArtifact(actor: Actor, id: string): { kind: 'evidence' | 'report'; id: string } | undefined {
+    const record = this.researchRunPreparation(actor, id), previousId = record.request.retryOfRunId;
+    if (!previousId) return undefined;
+    const previous = this.researchRunPreparation(actor, previousId), run = parseContract(RunSchema, this.get(actor, 'run', previousId));
+    if (previous.manifest.sessionId !== record.manifest.sessionId || !sameScope(previous.manifest.scope, record.manifest.scope)) throw new ResearchError('BIO_ACCESS_DENIED');
+    if (run.state !== 'completed' || run.artifactIds.length !== 1 || previous.manifest.contextHash !== record.manifest.contextHash || previous.connectionFingerprint !== record.connectionFingerprint || previous.request.purpose !== record.request.purpose) return undefined;
+    const proof = this.query<{ payload: string }, [string]>("SELECT payload FROM run_steps WHERE run_id=? AND step_id='projection-proof' AND state='completed'").get(previousId);
+    const artifact = { kind: record.request.purpose, id: run.artifactIds[0]! }, raw = this.query<{ payload: string }, [string, string]>('SELECT payload FROM entities WHERE kind=? AND id=?').get(artifact.kind, artifact.id);
+    if (!proof || !raw || !JSON.parse(proof.payload).artifacts.some((item: { id: string; kind: string; hash: string }) => item.id === artifact.id && item.kind === artifact.kind && item.hash === digest(raw.payload))) throw new ResearchError('BIO_STORAGE_UNAVAILABLE');
+    this.get(actor, artifact.kind, artifact.id);
+    return artifact;
+  }
+  completeResearchRun(actor: Actor, id: string, generation: number, workerId: string, work: () => { artifact: { kind: 'evidence' | 'report'; id: string }; header: { [key: string]: JsonValue }; messages: JsonValue[] }, now = Date.now()): ResearchRunView {
+    return this.tx(actor, this.binding('run', id), 'research-run-complete', id, current => {
+      const run = this.assertResearchRunLease(current, id, generation, workerId, now);
+      const unsettled = this.query("SELECT 1 FROM run_intents WHERE run_id=? AND operation_id LIKE 'model:%' AND state IN('pending','unknown')").get(id);
+      const validated = this.query("SELECT 1 FROM run_steps WHERE run_id=? AND step_id='model-result' AND state='completed'").get(id);
+      if (unsettled || !validated) throw new ResearchError('BIO_REVISION_CONFLICT');
+      if (this.hasUnclassifiedProjection(current, run.sessionId)) throw new ResearchError('BIO_POLICY_DENIED');
+      const result = work(), artifact = this.get(current, result.artifact.kind, result.artifact.id);
+      const reusable = this.researchRetryArtifact(current, id), reused = reusable?.id === result.artifact.id && reusable.kind === result.artifact.kind;
+      if (!('sessionId' in artifact) || artifact.sessionId !== run.sessionId || !sameScope(artifact.scope, run.scope) || !('reviewStatus' in artifact) || !reused && artifact.reviewStatus !== 'unreviewed' || artifact.policy !== 'public') throw new ResearchError('BIO_INPUT_INVALID');
+      const payload = JSON.stringify({ artifact: result.artifact });
+      this.query('INSERT INTO run_steps VALUES(?,?,?,?)').run(id, 'validate', 'completed', '{}');
+      this.query('INSERT INTO run_steps VALUES(?,?,?,?)').run(id, this.researchRunPreparation(current, id).request.purpose, 'completed', payload);
+      const latest = this.query<{ generation: number }, [string]>('SELECT generation FROM projection_journal WHERE session_id=? ORDER BY sequence DESC LIMIT 1').get(run.sessionId);
+      if (result.messages.length > 1000 || Buffer.byteLength(JSON.stringify(result)) > 1048576) throw new ResearchError('BIO_MODEL_BUDGET');
+      this.appendProjectionSnapshot(current, run.sessionId, id, result.header, result.messages, (latest?.generation ?? 0) + 1);
+      const journal = this.query<{ hash: string }, [string, string]>('SELECT hash FROM projection_journal WHERE session_id=? AND operation_id=?').get(run.sessionId, id)!;
+      const raw = this.query<{ payload: string }, [string, string]>('SELECT payload FROM entities WHERE kind=? AND id=?').get(result.artifact.kind, result.artifact.id)!;
+      const manifest = this.researchRunPreparation(current, id).manifest;
+      this.query('INSERT INTO run_steps VALUES(?,?,?,?)').run(id, 'projection-proof', 'completed', JSON.stringify({ hash: journal.hash, manifestId: manifest.id, artifacts: [{ ...result.artifact, hash: digest(raw.payload) }] }));
+      const completed = this.advanceRun(current, id, 'completed', generation, workerId, now);
+      const finalRun = parseContract(RunSchema, { ...completed, artifactIds: [result.artifact.id], step: this.researchRunPreparation(current, id).request.purpose });
+      this.query("UPDATE entities SET payload=? WHERE kind='run' AND id=?").run(JSON.stringify(finalRun), id);
+      return this.researchRunView(current, id);
+    });
+  }
+  failResearchRun(actor: Actor, id: string, generation: number, workerId: string, errorCode: string, now = Date.now()): void {
+    this.tx(actor, this.binding('run', id), 'research-run-failed', id, current => {
+      this.assertResearchRunLease(current, id, generation, workerId, now);
+      parseContract(z.enum(Object.keys(BIO_ERROR_MESSAGES) as [keyof typeof BIO_ERROR_MESSAGES, ...(keyof typeof BIO_ERROR_MESSAGES)[]]), errorCode);
+      this.query('INSERT INTO run_steps VALUES(?,?,?,?)').run(id, 'failure', 'failed', JSON.stringify({ errorCode }));
+      this.advanceRun(current, id, 'failed', generation, workerId, now);
+    });
+  }
+  interruptResearchRun(id: string, now = Date.now()): void {
+    parseContract(IdSchema, id); parseContract(GenerationSchema, now);
+    this.db.transaction(() => {
+      this.assertWriter();
+      const row = this.query<{ payload: string }, [string]>("SELECT payload FROM entities WHERE kind='run' AND id=?").get(id);
+      if (!row) throw new ResearchError('BIO_ACCESS_DENIED');
+      const run = parseContract(RunSchema, JSON.parse(row.payload));
+      if (!['queued', 'running'].includes(run.state)) return;
+      const result = transitionRun(run, 'interrupted', run.generation, Math.max(now, run.startedAt ?? run.createdAt));
+      this.query("UPDATE entities SET payload=? WHERE kind='run' AND id=?").run(JSON.stringify(result), id);
+      this.query("UPDATE heads SET revision=? WHERE kind='run' AND entity_id=?").run(result.revision, id);
+      this.query('DELETE FROM run_leases WHERE run_id=?').run(id);
+      this.query("UPDATE run_intents SET state='unknown' WHERE run_id=? AND state='pending'").run(id);
+      this.audit(run.actorId, run.scope, 'research-run-interrupted', 'success', id); this.event(run.scope, 'run', id, result.revision);
+    }).immediate();
+  }
+  /** Called once before accepting requests; interruption never replays external effects. */
+  recoverResearchRuns(now = Date.now()): number {
+    parseContract(GenerationSchema, now);
+    return this.db.transaction(() => {
+      this.assertWriter();
+      const rows = this.query<{ payload: string }, []>("SELECT payload FROM entities WHERE kind='run' AND json_extract(payload,'$.state') IN('queued','running')").all();
+      for (const row of rows) {
+        const run = parseContract(RunSchema, JSON.parse(row.payload)), result = transitionRun(run, 'interrupted', run.generation, Math.max(now, run.startedAt ?? run.createdAt));
+        this.query("UPDATE entities SET payload=? WHERE kind='run' AND id=?").run(JSON.stringify(result), run.id);
+        this.query("UPDATE heads SET revision=? WHERE kind='run' AND entity_id=?").run(result.revision, run.id);
+        this.query('DELETE FROM run_leases WHERE run_id=?').run(run.id);
+        this.query("UPDATE run_intents SET state='unknown' WHERE run_id=? AND state='pending'").run(run.id);
+        this.audit(run.actorId, run.scope, 'research-run-recovered', 'success', run.id); this.event(run.scope, 'run', run.id, result.revision);
+      }
+      return rows.length;
+    }).immediate();
+  }
+  publishResearchOutbox(publish: (event: ResearchEvent) => void): number {
+    this.assertWriter();
+    const rows = this.query<{ sequence: number; scope_json: string; kind: string; resource_id: string; revision: number }, []>(`SELECT o.*,s.scope_json FROM outbox o JOIN spaces s USING(scope_key) WHERE o.delivered=0 ORDER BY o.sequence LIMIT 100`).all();
+    for (const row of rows) {
+      const kinds = { run: 'run-changed', session: 'session-changed', evidence: 'evidence-changed', report: 'report-changed' } as const;
+      const kind = kinds[row.kind as keyof typeof kinds];
+      if (kind) {
+        const entity = this.query<{ session_id: string | null }, [string, string]>("SELECT json_extract(payload,'$.sessionId') AS session_id FROM entities WHERE kind=? AND id=?").get(row.kind, row.resource_id);
+        const sessionId = row.kind === 'session' ? row.resource_id : entity?.session_id;
+        if (sessionId) publish({ version: 1, id: `outbox-${row.sequence}`, sequence: row.sequence, scope: parseContract(ScopeSchema, JSON.parse(row.scope_json)),
+          kind, sessionId, resourceId: row.resource_id, revision: row.revision });
+      }
+      // Publication is not a client receipt. Reconnect always queries authoritative state.
+      this.query('UPDATE outbox SET delivered=1 WHERE sequence=?').run(row.sequence);
+    }
+    return rows.length;
+  }
+  pendingResearchProjections(afterId = ''): string[] {
+    this.assertWriter(); if (afterId) parseContract(IdSchema, afterId);
+    return this.query<{ id: string }, [string]>(`SELECT r.id FROM entities r JOIN projection_journal j ON j.operation_id=r.id
+      WHERE r.kind='run' AND r.id>? AND json_extract(r.payload,'$.state')='completed' AND j.projected=0
+      AND j.sequence=(SELECT max(p.sequence) FROM projection_journal p WHERE p.session_id=j.session_id) ORDER BY r.id LIMIT 20`).all(afterId).map(row => row.id);
+  }
   advanceRun(actor: Actor, id: string, nextInput: RunState, expectedGeneration: number, workerId: string | null,
     now: number, leaseExpiresAt?: number): ResearchRun {
     parseContract(IdSchema, id); parseContract(GenerationSchema, expectedGeneration); parseContract(GenerationSchema, now);
@@ -774,6 +1041,7 @@ export class SqliteResearchRepository implements ResearchRepository {
       this.query('UPDATE heads SET revision=? WHERE kind=? AND entity_id=? AND revision=?').run(result.revision, 'run', id, run.revision);
       this.query('DELETE FROM run_leases WHERE run_id=?').run(id);
       if (result.lease) this.query('INSERT INTO run_leases VALUES(?,?,?,?)').run(id, result.lease.workerId, result.lease.generation, result.lease.expiresAt);
+      if (['failed', 'cancelled', 'interrupted'].includes(result.state)) this.query("UPDATE run_intents SET state='unknown' WHERE run_id=? AND state='pending'").run(id);
       this.event(scope, 'run', id, result.revision);
       return result;
     });

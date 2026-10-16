@@ -231,6 +231,7 @@ export const BIO_ERROR_MESSAGES = {
   BIO_POLICY_DENIED: 'This context cannot be sent to a cloud model.',
   BIO_REVISION_CONFLICT: 'The revision has changed. Refresh before saving.',
   BIO_INVALID_TRANSITION: 'The research run cannot enter that state.',
+  BIO_RUN_ACTIVE: 'This research session already has an active run.',
   BIO_STORAGE_UNAVAILABLE: 'Research storage is unavailable.',
   BIO_PROVIDER_RATE_LIMITED: 'The literature provider is rate limited. Retry later.',
   BIO_PROVIDER_TIMEOUT: 'The literature provider timed out. Retry the request.',

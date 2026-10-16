@@ -11,8 +11,9 @@ import type { LiteratureService } from './literature-service'
 import type { SourceSnapshotService } from './source-snapshots'
 import type { ArtifactsService } from './artifacts-service'
 import type { ResearchConnectionsService } from './model-connections'
-export function registerResearchRpcProfile(server: WsRpcServer, repository: ResearchRepository, materials?: MaterialsService, previews?: MaterialPreviewService, literature?: LiteratureService, snapshots?: SourceSnapshotService, artifacts?: ArtifactsService, connections?: ResearchConnectionsService) {
-  const gate = new ResearchAuthorizationGate(repository, materials, previews, literature, snapshots, artifacts, connections)
+import type { ResearchRunService } from './research-run-service'
+export function registerResearchRpcProfile(server: WsRpcServer, repository: ResearchRepository, materials?: MaterialsService, previews?: MaterialPreviewService, literature?: LiteratureService, snapshots?: SourceSnapshotService, artifacts?: ArtifactsService, connections?: ResearchConnectionsService, runs?: ResearchRunService) {
+  const gate = new ResearchAuthorizationGate(repository, materials, previews, literature, snapshots, artifacts, connections, runs)
   server.setAuthorizationGate(gate)
   const handlers = new Map<string, (current: Actor, input: any) => unknown>()
   const actor = (context: RequestContext): Actor => {
@@ -30,6 +31,12 @@ export function registerResearchRpcProfile(server: WsRpcServer, repository: Rese
   if (connections) {
     register(R.LIST_MODEL_CONNECTIONS, (current, input) => connections.list(current, input.scope))
     register(R.SAVE_MODEL_CONNECTION, (current, input) => connections.save(current, input))
+  }
+  if (runs) {
+    register(R.START_RUN, (current, input) => runs.start(current, input))
+    register(R.GET_RUN, (current, input) => runs.get(current, input.runId))
+    register(R.CANCEL_RUN, (current, input) => runs.cancel(current, input.runId, input.expectedGeneration))
+    register(R.LIST_RUNS, (current, input) => runs.list(current, input.sessionId, input.pageSize, input.cursor))
   }
   if (materials) {
     register(R.LIST_MATERIAL_GRANTS, (current, input) => materials.listGrants(current, input.scope))

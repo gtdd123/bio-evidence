@@ -8,6 +8,9 @@ import { basename, dirname, join } from 'path'
 import { existsSync } from 'fs'
 import { readFile, writeFile, mkdir } from 'fs/promises'
 import { randomUUID } from 'node:crypto'
+import { createSessionHeader } from '@craft-agent/shared/sessions/jsonl'
+import type { Actor, JsonValue, ResearchEvent } from '@bio-evidence/research-core'
+import type { SessionProjectionService } from '../research/projection-service'
 import { type AgentEvent, setPermissionMode, hydratePreviousPermissionMode, getPermissionModeDiagnostics, type PermissionMode, unregisterSessionScopedToolCallbacks, mergeSessionScopedToolCallbacks, AbortReason, type AuthRequest, type AuthResult, type CredentialAuthRequest, type BrowserPaneFns, generateConversationSummary, resolveKeepBackgroundTasksAlive } from '@craft-agent/shared/agent'
 import {
   resolveSessionConnection,
@@ -1203,6 +1206,20 @@ export function resolveMidStreamDeliveryOutcome(
 }
 
 export class SessionManager implements ISessionManager {
+  private researchProjection?: SessionProjectionService
+  configureResearchProjection(projection: SessionProjectionService): void { this.researchProjection = projection }
+  researchSessionSnapshot(session: StoredSession): { header: { [key: string]: JsonValue }; messages: JsonValue[] } {
+    if (!this.researchProjection) throw new Error('Research projection is not configured')
+    return { header: JSON.parse(JSON.stringify({ ...createSessionHeader(session), lastUsedAt: session.lastUsedAt })), messages: JSON.parse(JSON.stringify(session.messages)) }
+  }
+  reconcileResearchSession(actor: Actor, id: string): Promise<void> {
+    if (!this.researchProjection) throw new Error('Research projection is not configured')
+    return this.researchProjection.reconcile(actor, id)
+  }
+  publishResearchEvent(event: ResearchEvent): void {
+    if (!this.eventSink) throw new Error('Research event sink is not configured')
+    this.eventSink(RPC_CHANNELS.research.EVENT, { to: 'all' }, event)
+  }
   private sessions: Map<string, ManagedSession> = new Map()
   // Delta batching for performance - reduces IPC events from 50+/sec to ~20/sec
   private pendingDeltas: Map<string, PendingDelta> = new Map()

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { ResearchError, SessionSchema, SnapshotSchema, EvidenceRevisionSchema, IdSchema, RevisionSchema,
   parseContract, validateCitation, sameScope, mergePolicies, reviseEvidence, ReportRevisionSchema,
   renderReportMarkdown, ArtifactExportSchema, EvidenceViewSchema, ReportViewSchema, SourceSchema, EvidenceEditContentSchema, CreateEvidenceRequestSchema, SaveEvidenceRequestSchema, CreateReportRequestSchema, SaveReportRequestSchema,
+  PublicCandidateResultSchema, type PublicCandidateResult,
   type Actor, type EvidenceRevision, type ReportRevision, type EvidenceView, type ReportView, type ArtifactExport } from '@bio-evidence/research-core'
 import type { SqliteResearchRepository } from './sqlite-repository'
 function markdownText(value: string): string { return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/[\\`*_{}\[\]()#!|]/g, char => '\\' + char) }
@@ -13,6 +14,12 @@ class BoundedExport {
 }
 export class ArtifactsService {
   constructor(private readonly repository: SqliteResearchRepository) {}
+  createGeneratedCandidate(actor: Actor, sessionId: string, raw: PublicCandidateResult): EvidenceRevision | ReportRevision {
+    const candidate = parseContract(PublicCandidateResultSchema, raw)
+    return this.repository.artifactOperation(actor, 'session', sessionId, candidate.kind === 'evidence' ? 'evidence-create' : 'report-create', () =>
+      candidate.kind === 'evidence' ? this.createEvidenceContent(actor, { ...candidate.content, sessionId, declaredPublic: true }, 'generated-public-context')
+        : this.createReportContent(actor, { ...candidate.content, sessionId, declaredPublic: true }, 'generated-public-context'))
+  }
   authorizeOperationRequest(actor: Actor, kind: 'session' | 'source' | 'evidence' | 'report', id: string, operation: Parameters<SqliteResearchRepository['artifactOperation']>[3]) {
     this.repository.artifactOperation(actor, kind, id, operation, () => undefined, 'request')
   }
@@ -74,7 +81,7 @@ export class ArtifactsService {
   createReport(actor: Actor, raw: unknown): ReportRevision {
     return this.repository.artifactOperation(actor, 'session', this.targetId(raw, 'sessionId'), 'report-create', () => this.createReportContent(actor, raw))
   }
-  private createReportContent(actor: Actor, raw: unknown): ReportRevision {
+  private createReportContent(actor: Actor, raw: unknown, declarationKind: 'explicit-public-edit' | 'generated-public-context' = 'explicit-public-edit'): ReportRevision {
     const input = parseContract(CreateReportRequestSchema, raw)
     if (Buffer.byteLength(JSON.stringify(input)) > 8 * 1024 * 1024) throw new ResearchError('BIO_EXPORT_BUDGET')
     const session = parseContract(SessionSchema, this.repository.get(actor, 'session', input.sessionId))
@@ -85,7 +92,7 @@ export class ArtifactsService {
       markdown: renderReportMarkdown(input), claims: input.claims, evidenceRevisionIds, structuralStatus: valid ? 'structure-valid' : 'pending', reviewStatus: 'unreviewed',
       researchQuestion: input.researchQuestion, materialScope: input.materialScope, limitations: input.limitations, missingInformation: input.missingInformation,
       policy: dependencies.policy, authorId: actor.userId, createdAt: now,
-      ...(input.declaredPublic ? { declaration: { actorId: actor.userId, declaredAt: now, kind: 'explicit-public-edit' } } : {}) })
+      ...(input.declaredPublic ? { declaration: { actorId: actor.userId, declaredAt: now, kind: declarationKind } } : {}) })
     return parseContract(ReportRevisionSchema, this.repository.commitArtifact(actor, 'report', report, 0))
   }
   saveReport(actor: Actor, raw: unknown): ReportRevision {
@@ -170,7 +177,7 @@ export class ArtifactsService {
   createEvidence(actor: Actor, raw: unknown): EvidenceRevision {
     return this.repository.artifactOperation(actor, 'session', this.targetId(raw, 'sessionId'), 'evidence-create', () => this.createEvidenceContent(actor, raw))
   }
-  private createEvidenceContent(actor: Actor, raw: unknown): EvidenceRevision {
+  private createEvidenceContent(actor: Actor, raw: unknown, declarationKind: 'explicit-public-edit' | 'generated-public-context' = 'explicit-public-edit'): EvidenceRevision {
     const { sessionId, ...body } = parseContract(CreateEvidenceRequestSchema, raw), session = parseContract(SessionSchema, this.repository.get(actor, 'session', sessionId))
     if (Buffer.byteLength(JSON.stringify(body)) > 8 * 1024 * 1024) throw new ResearchError('BIO_EXPORT_BUDGET')
     this.repository.authorizeScope(actor, session.scope, 'write')
@@ -178,7 +185,7 @@ export class ArtifactsService {
     const evidence = parseContract(EvidenceRevisionSchema, { id: randomUUID(), evidenceId: randomUUID(), sessionId, scope: session.scope, revision: 1,
       claim: content.claim, citations: content.citations, factSummary: content.factSummary, limitations: content.limitations, missingInformation: content.missingInformation,
       policy, structuralIssues, structuralStatus: structuralIssues.length ? 'pending' : 'structure-valid', reviewStatus: 'unreviewed', authorId: actor.userId, createdAt: now,
-      ...(content.declaredPublic ? { declaration: { actorId: actor.userId, declaredAt: now, kind: 'explicit-public-edit' } } : {}) })
+      ...(content.declaredPublic ? { declaration: { actorId: actor.userId, declaredAt: now, kind: declarationKind } } : {}) })
     return parseContract(EvidenceRevisionSchema, this.repository.commitArtifact(actor, 'evidence', evidence, 0))
   }
   saveEvidence(actor: Actor, raw: unknown): EvidenceRevision {

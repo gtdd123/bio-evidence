@@ -10,6 +10,7 @@ import type { DocumentIngestResult } from './documents.ts';
 import { CreateEvidenceRequestSchema, SaveEvidenceRequestSchema, CreateReportRequestSchema, SaveReportRequestSchema,
   type EvidenceView, type ReportView, type ArtifactExport, type ArtifactPage } from './artifacts.ts';
 import { SaveResearchConnectionSchema, type ResearchConnectionView } from './public-research.ts';
+import { StartResearchRunSchema, type ResearchRunView } from './runs.ts';
 
 export const RESEARCH_PROTOCOL_VERSION = 1 as const;
 export const RESEARCH_CHANNELS = {
@@ -33,6 +34,7 @@ export const RESEARCH_CHANNELS = {
   GET_SNAPSHOT: 'research:v1:getSnapshot', SAVE_EVIDENCE: 'research:v1:saveEvidence',
   SAVE_REPORT: 'research:v1:saveReport', START_RUN: 'research:v1:startRun',
   CANCEL_RUN: 'research:v1:cancelRun', GET_RUN: 'research:v1:getRun',
+  LIST_RUNS: 'research:v1:listRuns',
   EVENT: 'research:v1:event',
 } as const;
 export const CreateSessionSchema = z.strictObject({ scope: ScopeSchema, name: z.string().trim().min(1).max(300), sourceIds: IdListSchema.default([]) });
@@ -80,9 +82,10 @@ export const ResearchRequestSchemas = {
   [RESEARCH_CHANNELS.LIST_ARTIFACTS]: z.strictObject({ sessionId: IdSchema, pageSize: z.number().int().min(1).max(200).default(100), cursor: z.string().max(256).optional() }),
   [RESEARCH_CHANNELS.REVIEW_ARTIFACT]: z.strictObject({ kind: z.enum(['evidence', 'report']), revisionId: IdSchema, expectedRevision: RevisionSchema, decision: z.enum(['confirmed', 'needs-changes']) }),
   [RESEARCH_CHANNELS.CONFIRM_SOURCE_METADATA]: z.strictObject({ sourceId: IdSchema, expectedRevision: RevisionSchema }),
-  [RESEARCH_CHANNELS.START_RUN]: z.strictObject({ sessionId: IdSchema, expectedRevision: RevisionSchema, connectionId: IdSchema, sourceIds: IdListSchema, question: z.string().trim().min(1).max(20000), operationId: IdSchema }),
+  [RESEARCH_CHANNELS.START_RUN]: StartResearchRunSchema,
   [RESEARCH_CHANNELS.CANCEL_RUN]: z.strictObject({ runId: IdSchema, expectedGeneration: GenerationSchema }),
   [RESEARCH_CHANNELS.GET_RUN]: z.strictObject({ runId: IdSchema }),
+  [RESEARCH_CHANNELS.LIST_RUNS]: z.strictObject({ sessionId: IdSchema, pageSize: z.number().int().min(1).max(100).default(20), cursor: IdSchema.optional() }),
 } as const;
 export type ResearchRequestChannel = keyof typeof ResearchRequestSchemas;
 export type ResearchRequest<C extends ResearchRequestChannel> = z.infer<(typeof ResearchRequestSchemas)[C]>;
@@ -135,9 +138,10 @@ export interface ResearchRpcChannelMap {
   'research:v1:getSnapshot': { args: [ResearchRequest<'research:v1:getSnapshot'>]; result: ReadingSnapshot };
   'research:v1:saveEvidence': { args: [ResearchRequest<'research:v1:saveEvidence'>]; result: EvidenceRevision };
   'research:v1:saveReport': { args: [ResearchRequest<'research:v1:saveReport'>]; result: ReportRevision };
-  'research:v1:startRun': { args: [ResearchRequest<'research:v1:startRun'>]; result: ResearchRun };
-  'research:v1:cancelRun': { args: [ResearchRequest<'research:v1:cancelRun'>]; result: ResearchRun };
-  'research:v1:getRun': { args: [ResearchRequest<'research:v1:getRun'>]; result: ResearchRun };
+  'research:v1:startRun': { args: [ResearchRequest<'research:v1:startRun'>]; result: ResearchRunView };
+  'research:v1:cancelRun': { args: [ResearchRequest<'research:v1:cancelRun'>]; result: ResearchRunView };
+  'research:v1:getRun': { args: [ResearchRequest<'research:v1:getRun'>]; result: ResearchRunView };
+  'research:v1:listRuns': { args: [ResearchRequest<'research:v1:listRuns'>]; result: { items: ResearchRun[]; nextCursor?: string } };
   'research:v1:event': { args: [ResearchEvent]; result: void };
 }
 export const ResearchEventSchema = z.strictObject({

@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
 import { ResearchError, parseContract } from '@bio-evidence/research-core'
 import { buildNamespaceEnv, resolveConfigDir, validateNamespacePath } from '@craft-agent/shared/config/namespace.mjs'
-import { PublicPiStartSchema, PublicPiOutputSchema } from './public-pi-protocol'
+import { PublicPiStartSchema, PublicPiOutputSchema, type PublicModelAttempt } from './public-pi-protocol'
 import type { PreparedPublicInput } from './public-input'
 const Options = z.strictObject({ timeoutMs: z.number().int().min(100).max(180000).default(120000), workerPath: z.string().optional() })
 export class PublicModelWorkerService {
@@ -14,11 +14,11 @@ export class PublicModelWorkerService {
   private closed = false
   constructor(options: z.input<typeof Options> = {}) { this.options = Options.parse(options) }
   get activeProcessIds(): number[] { return [...this.children.keys()] }
-  async run(prepared: PreparedPublicInput, purpose: 'evidence' | 'report', apiKey: string, signal?: AbortSignal, mode: 'generate' | 'inspect' = 'generate'): Promise<string> {
-    const pending = this.runTask(prepared, purpose, apiKey, signal, mode); this.pending.add(pending)
+  async run(prepared: PreparedPublicInput, purpose: 'evidence' | 'report', apiKey: string, signal?: AbortSignal, mode: 'generate' | 'inspect' = 'generate', onAttempt?: (event: PublicModelAttempt) => Promise<void>): Promise<string> {
+    const pending = this.runTask(prepared, purpose, apiKey, signal, mode, onAttempt); this.pending.add(pending)
     try { return await pending } finally { this.pending.delete(pending) }
   }
-  private async runTask(prepared: PreparedPublicInput, purpose: 'evidence' | 'report', apiKey: string, signal?: AbortSignal, mode: 'generate' | 'inspect' = 'generate'): Promise<string> {
+  private async runTask(prepared: PreparedPublicInput, purpose: 'evidence' | 'report', apiKey: string, signal?: AbortSignal, mode: 'generate' | 'inspect' = 'generate', onAttempt?: (event: PublicModelAttempt) => Promise<void>): Promise<string> {
     if (this.closed || signal?.aborted) throw new ResearchError('BIO_MODEL_CANCELLED')
     if (this.children.size) throw new ResearchError('BIO_MODEL_UNAVAILABLE')
     prepared.assertCurrent()
@@ -55,7 +55,13 @@ export class PublicModelWorkerService {
             const frame = parseContract(PublicPiOutputSchema, JSON.parse(line))
             if (frame.type === 'error') throw new ResearchError(frame.code)
             prepared.assertCurrent()
-            if (frame.type === 'check') { sink.write(JSON.stringify({ type: 'allow', id: frame.id }) + '\n'); await sink.flush() }
+            if (frame.type === 'check') {
+              if (frame.kind === 'attempt') {
+                if (!onAttempt) throw new ResearchError('BIO_STORAGE_UNAVAILABLE')
+                await onAttempt(frame.attempt); prepared.assertCurrent()
+              }
+              sink.write(JSON.stringify({ type: 'allow', id: frame.id }) + '\n'); await sink.flush()
+            }
             else text = frame.text
           }
         }
