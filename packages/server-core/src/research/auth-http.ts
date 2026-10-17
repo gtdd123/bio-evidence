@@ -48,10 +48,12 @@ export function actorFromHeaders(auth: BioAuthService, boundary: AuthBoundary, h
   if (authorization) {
     if (cookies.length) return null
     const bearer = /^Bearer ([A-Za-z0-9._-]+)$/i.exec(authorization)
-    return bearer ? auth.authenticate(bearer[1]!) : null
+    const actor = bearer ? auth.authenticate(bearer[1]!) : null
+    return actor && (!headers.has('x-bio-session-binding') || headers.get('x-bio-session-binding') === actor.authSessionId) ? actor : null
   }
   if (cookies.length !== 1) return null
-  return auth.authenticate(cookies[0]!.slice(boundary.cookieName.length + 1))
+  const actor = auth.authenticate(cookies[0]!.slice(boundary.cookieName.length + 1))
+  return actor && (!headers.has('x-bio-session-binding') || headers.get('x-bio-session-binding') === actor.authSessionId) ? actor : null
 }
 export async function boundedCredentials(request: Request): Promise<z.infer<typeof Credentials>> {
   if (request.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase() !== 'application/json') throw Error('INVALID')
@@ -101,15 +103,18 @@ export function createBioAuthHandler(auth: BioAuthService, boundary: AuthBoundar
         try {
           const session = await auth.login(input.username, input.password)
           return desktop ? result({ token: session.token, account: session.account, expiresAt: session.expiresAt }) :
-            result({ account: session.account, expiresAt: session.expiresAt }, 200, boundary.cookie(session.token))
+            result({ account: session.account, expiresAt: session.expiresAt, sessionBinding: session.actor.authSessionId }, 200, boundary.cookie(session.token))
         } catch { return result({ error: 'AUTH_FAILED' }, 401) } finally { verifying-- }
       }
       const actor = actorFromHeaders(auth, boundary, request.headers)
-      if (!actor) return result({ error: 'AUTH_FAILED' }, 401, logout ? boundary.cookie(null) : undefined)
-      if (logout) { auth.logout(actor); return result({ success: true }, 200, boundary.cookie(null)) }
-      return result({ account: auth.currentAccount(actor) })
+      const unboundLogout = logout && !request.headers.has('x-bio-session-binding')
+      if (!actor) return result({ error: 'AUTH_FAILED' }, 401, unboundLogout ? boundary.cookie(null) : undefined)
+      // A bound logout cannot clear a newer cookie set by another browser tab,
+      // even when this successful response arrives after that tab's login.
+      if (logout) { auth.logout(actor); return result({ success: true }, 200, unboundLogout ? boundary.cookie(null) : undefined) }
+      return result({ account: auth.currentAccount(actor), sessionBinding: actor.authSessionId })
     } catch (error) {
-      if ((error as { code?: string }).code === 'AUTH_FAILED') return result({ error: 'AUTH_FAILED' }, 401, logout ? boundary.cookie(null) : undefined)
+      if ((error as { code?: string }).code === 'AUTH_FAILED') return result({ error: 'AUTH_FAILED' }, 401, logout && !request.headers.has('x-bio-session-binding') ? boundary.cookie(null) : undefined)
       return result({ error: 'BIO_STORAGE_UNAVAILABLE' }, 503)
     }
   }

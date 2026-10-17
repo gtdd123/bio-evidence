@@ -16,6 +16,7 @@
 @source "./adapter/**/*.{ts,tsx}";
 @source "./App.tsx";
 @source "./main.tsx";
+@source "../../electron/src/renderer/bio/**/*.{ts,tsx}";
 
 /*
  * Import the Electron renderer's full CSS (theme variables, base styles, animations).

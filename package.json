@@ -23,6 +23,8 @@
   "scripts": {
     "bio:server": "node scripts/bio-launch.mjs runtime run packages/server/src/bio-index.ts",
     "bio:account": "node scripts/bio-launch.mjs runtime run packages/server/src/bio-account.ts",
+    "bio:web:build": "node scripts/bio-launch.mjs build run scripts/bio-renderer-build.ts web",
+    "bio:desktop:build": "node scripts/bio-launch.mjs build run scripts/bio-electron-build.ts && node scripts/bio-launch.mjs build run scripts/bio-renderer-build.ts desktop",
     "test": "node scripts/bio-tests.mjs",
     "test:bio": "node scripts/bio-launch.mjs test test packages/research-core/src packages/shared/src/protocol/__tests__/research.test.ts packages/server-core/src/research",
     "bio:typecheck": "tsc --noEmit -p packages/research-core/tsconfig.json",

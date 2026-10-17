@@ -16,6 +16,9 @@ export const SaveResearchConnectionSchema = z.strictObject({ configuration: Depl
 export const ResearchConnectionViewSchema = z.strictObject({ slug: IdSchema, name: nonBlankText(120), providerType: z.enum(['pi', 'pi_compat']), revision: RevisionSchema, enabled: z.boolean(),
   baseUrl: z.string(), api: z.enum(['openai-responses', 'openai-completions']), models: z.array(ResearchModelSchema).max(100), keyConfigured: z.boolean() })
 export type ResearchConnectionView = z.infer<typeof ResearchConnectionViewSchema>
+export const ResearchConnectionConfigurationSchema = z.strictObject({ configuration: SaveResearchConnectionSchema.shape.configuration,
+  revision: RevisionSchema, keyConfigured: z.boolean() })
+export type ResearchConnectionConfiguration = z.infer<typeof ResearchConnectionConfigurationSchema>
 export const PublicInputRequestSchema = z.strictObject({ sessionId: IdSchema, connectionId: IdSchema, model: ResearchModelIdSchema, question: nonBlankText(32000), declaredPublic: z.literal(true),
   blocks: z.array(z.strictObject({ snapshotId: IdSchema, blockId: IdSchema, start: z.number().int().nonnegative(), end: z.number().int().positive() }).refine(value => value.end > value.start)).min(1).max(100),
   evidenceRevisionIds: z.array(IdSchema).max(100).default([]) })

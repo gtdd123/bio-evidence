@@ -14,4 +14,4 @@ export {
   type TransportConnectionError,
   type TransportCloseInfo,
   type TransportConnectionState,
-} from '@craft-agent/server-core/transport'
+} from '@craft-agent/server-core/transport/client'

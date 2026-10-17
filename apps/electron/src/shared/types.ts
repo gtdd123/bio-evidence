@@ -224,6 +224,7 @@ import type {
 } from '@craft-agent/shared/protocol'
 
 export interface ElectronAPI {
+  research: import('./bio-api').ResearchClientApi
   // Session management
   getSessions(): Promise<Session[]>
   getUnreadSummary(): Promise<UnreadSummary>

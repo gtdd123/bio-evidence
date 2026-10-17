@@ -17,6 +17,8 @@ import { EuropePmcProvider } from '../../server-core/src/research/literature-pro
 import { DocumentParseService } from '../../server-core/src/research/document-parse'
 import { SourceSnapshotService } from '../../server-core/src/research/source-snapshots'
 import { createDocumentsHttpAdapter } from '../../server-core/src/research/documents-http'
+import { createBioUiHttpAdapter } from '../../server-core/src/research/ui-http'
+import { fileURLToPath } from 'node:url'
 import { ArtifactsService } from '../../server-core/src/research/artifacts-service'
 import { getCredentialManager } from '@craft-agent/shared/credentials'
 import { ResearchConnectionsService } from '../../server-core/src/research/model-connections'
@@ -42,7 +44,7 @@ function readOwnedFile(path: string): string {
   if (offset === '..' || offset.startsWith(`..${sep}`) || isAbsolute(offset)) throw Error('Invalid service file boundary')
   return readFileSync(target, 'utf8')
 }
-export async function startBioServer() {
+export async function startBioServer(options: { uiRoot?: string } = {}) {
   const settingsFile = join(resolveConfigDir(), 'service.json')
   const settings = Settings.parse(existsSync(settingsFile) ? JSON.parse(readOwnedFile(settingsFile)) : {})
   const repository = new SqliteResearchRepository(join(resolveConfigDir(), 'research.sqlite'))
@@ -50,10 +52,14 @@ export async function startBioServer() {
   try {
     let materialHttp: ReturnType<typeof createMaterialsHttpAdapter> | undefined
     let documentHttp: ReturnType<typeof createDocumentsHttpAdapter> | undefined
-    const instance = await createBioAuthorityServer(repository, { ...settings, additionalHttpHandler: (request, response) => documentHttp?.(request, response) || materialHttp?.(request, response) || false, tls: settings.tls ? {
+    let uiHttp: ReturnType<typeof createBioUiHttpAdapter> | undefined
+    const instance = await createBioAuthorityServer(repository, { ...settings, additionalHttpHandler: (request, response) => documentHttp?.(request, response) || materialHttp?.(request, response) || uiHttp?.(request, response) || false, tls: settings.tls ? {
       cert: readOwnedFile(settings.tls.certPath), key: readOwnedFile(settings.tls.keyPath),
     } : undefined })
     resources.server = instance.server
+    const sourceUiRoot = fileURLToPath(new URL('../../../apps/webui/dist/', import.meta.url))
+    const uiRoot = options.uiRoot ?? (existsSync(join(sourceUiRoot, 'bio-ui.json')) ? sourceUiRoot : undefined)
+    uiHttp = createBioUiHttpAdapter(instance.auth, instance.boundary, uiRoot)
     const materials = new MaterialsService(repository, loadMaterialGrants(), { budgets: settings.materialBudgets, currentActor: actor => {
       const current = instance.auth.resolveActor(actor.authSessionId)
       if (!current || current.userId !== actor.userId) throw new ResearchError('BIO_ACCESS_DENIED')

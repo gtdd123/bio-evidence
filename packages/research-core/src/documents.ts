@@ -1,5 +1,10 @@
 import { z } from 'zod'
-import { CoverageSchema, TextBlockSchema, SourceSchema, SessionSchema, SnapshotSchema, IdSchema, RevisionSchema } from './contracts'
+import { CoverageSchema, TextBlockSchema, SourceSchema, SessionSchema, SnapshotSchema, IdSchema, RevisionSchema, PolicySchema } from './contracts'
+export const SourceSnapshotSummarySchema = z.strictObject({ id: IdSchema, sourceId: IdSchema, policy: PolicySchema,
+  format: SnapshotSchema.shape.format, coverageLevel: CoverageSchema.shape.level, totalUnits: z.number().int().positive(), readUnits: z.number().int().nonnegative(),
+  retrievedAt: z.number().int().nonnegative(), contentHash: z.string().regex(/^[a-f0-9]{64}$/) }).refine(value => value.readUnits <= value.totalUnits)
+export const SourceSnapshotPageSchema = z.strictObject({ items: z.array(SourceSnapshotSummarySchema).max(100), nextCursor: IdSchema.optional() })
+export type SourceSnapshotPage = z.infer<typeof SourceSnapshotPageSchema>
 export const DocumentBudgetsSchema = z.strictObject({
   pdfMaxBytes: z.number().int().min(1).max(25 * 1024 * 1024).default(25 * 1024 * 1024),
   pdfMaxPages: z.number().int().min(1).max(100).default(100),

@@ -4,7 +4,7 @@ import { RESEARCH_CHANNELS as R, ResearchRequestSchemas, ResearchEventSchema, Re
   MaterialRootSchema, MaterialGrantViewSchema, MaterialPageSchema, MaterialSearchResultSchema, MaterialDirectoryStateSchema, MaterialAnnotationSchema,
   MaterialImageResultSchema,
   LiteratureSelectionSchema, DocumentIngestResultSchema, EvidenceViewSchema, ReportViewSchema, ArtifactExportSchema, ArtifactPageSchema,
-  ResearchConnectionViewSchema,
+  ResearchConnectionViewSchema, ResearchConnectionConfigurationSchema, SourceSnapshotPageSchema,
   ResearchRunViewSchema, ResearchRunPageSchema,
   type Actor, type ResearchRepository, type ResearchRequestChannel, type ResearchScope,
 } from '@bio-evidence/research-core'
@@ -37,6 +37,13 @@ export class ResearchAuthorizationGate implements TransportAuthorizationGate {
     if (args.length !== 1) throw new ResearchError('BIO_INPUT_INVALID')
     const input = parseResearchRequest(channel, args[0]) as Record<string, unknown>
     switch (channel) {
+      case R.GET_MODEL_CONNECTION_CONFIGURATION:
+        if (!this.connections) throw new ResearchError('BIO_ACCESS_DENIED')
+        this.connections.configuration(actor, input.connectionId as string); return
+      case R.LIST_SOURCE_SNAPSHOTS:
+        this.repository.authorizeResource(actor, 'source', input.sourceId as string, 'read'); return
+      case R.LIST_ARTIFACT_REVISIONS:
+        this.repository.authorizeResource(actor, input.kind as 'evidence' | 'report', input.entityId as string, 'read'); return
       case R.LIST_MODEL_CONNECTIONS:
         if (!this.connections) throw new ResearchError('BIO_ACCESS_DENIED')
         this.repository.authorizeScope(actor, input.scope as ResearchScope, 'read'); return
@@ -130,6 +137,14 @@ export class ResearchAuthorizationGate implements TransportAuthorizationGate {
   authorizeResponse(actor: Actor, channel: string, args: unknown[], result: unknown): void {
     this.authorizeRequest(actor, channel, args)
     const input = parseResearchRequest(channel, args[0]) as Record<string, unknown>
+    if (channel === R.LIST_SOURCE_SNAPSHOTS || channel === R.LIST_ARTIFACT_REVISIONS || channel === R.GET_MODEL_CONNECTION_CONFIGURATION) {
+      const expected = channel === R.LIST_SOURCE_SNAPSHOTS ? this.snapshots?.list(actor, input.sourceId as string, input.pageSize as number, input.cursor as string | undefined)
+        : channel === R.LIST_ARTIFACT_REVISIONS ? this.artifacts?.history(actor, input.kind as 'evidence' | 'report', input.entityId as string, input.pageSize as number, input.cursor as string | undefined)
+        : this.connections?.configuration(actor, input.connectionId as string)
+      const schema = channel === R.LIST_SOURCE_SNAPSHOTS ? SourceSnapshotPageSchema : channel === R.LIST_ARTIFACT_REVISIONS ? ArtifactPageSchema : ResearchConnectionConfigurationSchema
+      parseContract(schema as z.ZodType<unknown>, result)
+      if (!expected || JSON.stringify(result) !== JSON.stringify(expected)) throw new ResearchError('BIO_ACCESS_DENIED')
+    }
     if (channel === R.START_RUN || channel === R.GET_RUN || channel === R.CANCEL_RUN) {
       if (!this.runs) throw new ResearchError('BIO_ACCESS_DENIED')
       const view = parseContract(ResearchRunViewSchema, result), requestedId = channel === R.START_RUN ? view.run.id : input.runId

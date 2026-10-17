@@ -1,5 +1,11 @@
 import { describe, expect, test } from 'bun:test'
-import { WsRpcClient } from '../client'
+import { WsRpcClient, validateUserSessionWsUrl } from '../client'
+
+test('nonsecret browser session bindings are allowed while credential and extra URL parameters remain rejected', () => {
+  expect(() => validateUserSessionWsUrl('ws://127.0.0.1:9100/?bioBinding=auth-session-a')).not.toThrow()
+  expect(() => validateUserSessionWsUrl('wss://lab.example/?bioBinding=auth-session-a')).not.toThrow()
+  for (const query of ['?token=synthetic', '?bioBinding=', '?bioBinding=a&bioBinding=b', '?bioBinding=a&token=synthetic', '?bioBinding=a%20b']) expect(() => validateUserSessionWsUrl('wss://lab.example/' + query)).toThrow()
+})
 describe('common authenticated WS connection URL boundary', () => {
   test('all constructors refuse remote plaintext, deceptive loopback names, userinfo and credential query before connect', () => {
     for (const url of ['ws://lab.example/rpc', 'ws://127.0.0.1.evil.example', 'ws://localhost.evil.example',

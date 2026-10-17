@@ -27,7 +27,7 @@ export function validateUserSessionWsUrl(value: string): void {
     if (value.length > 2048 || value.trim() !== value || /[\x00-\x1f\x7f]/.test(value)) throw Error('Invalid URL')
     url = new URL(value)
   } catch { throw new Error('A valid secure service URL is required.') }
-  if (!['ws:', 'wss:'].includes(url.protocol) || url.username || url.password || url.search || url.hash ||
+  if (!['ws:', 'wss:'].includes(url.protocol) || url.username || url.password || url.search && !/^\?bioBinding=[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(url.search) || url.hash ||
     url.protocol === 'ws:' && !['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)) {
     throw new Error('Remote user sessions require WSS without URL credentials.')
   }

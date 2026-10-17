@@ -29,6 +29,7 @@ export function registerResearchRpcProfile(server: WsRpcServer, repository: Rese
     })
   }
   if (connections) {
+    register(R.GET_MODEL_CONNECTION_CONFIGURATION, (current, input) => connections.configuration(current, input.connectionId))
     register(R.LIST_MODEL_CONNECTIONS, (current, input) => connections.list(current, input.scope))
     register(R.SAVE_MODEL_CONNECTION, (current, input) => connections.save(current, input))
   }
@@ -61,10 +62,12 @@ export function registerResearchRpcProfile(server: WsRpcServer, repository: Rese
     register(R.GET_SNAPSHOT, (current, input) => repository.get(current, 'snapshot', input.snapshotId))
   }
   if (snapshots) {
+    register(R.LIST_SOURCE_SNAPSHOTS, (current, input) => snapshots.list(current, input.sourceId, input.pageSize, input.cursor))
     register(R.READ_SOURCE_TEXT, (current, input) => snapshots.readOpenText(current, input))
     if (materials) register(R.IMPORT_MATERIAL_PDF, (current, input) => snapshots.importMaterialPdf(current, input))
   }
   if (artifacts) {
+    register(R.LIST_ARTIFACT_REVISIONS, (current, input) => artifacts.history(current, input.kind, input.entityId, input.pageSize, input.cursor))
     register(R.CREATE_EVIDENCE, (current, input) => artifacts.createEvidence(current, input))
     register(R.SAVE_EVIDENCE, (current, input) => artifacts.saveEvidence(current, input))
     register(R.CREATE_REPORT, (current, input) => artifacts.createReport(current, input))

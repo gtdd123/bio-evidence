@@ -12,6 +12,7 @@ export class SourceSnapshotService {
   constructor(private readonly repository: SqliteResearchRepository, private readonly literature: LiteratureService, private readonly parser: DocumentParseService,
     private readonly options: { materials?: MaterialsService; currentActor?: (actor: Actor) => Actor } = {}) {}
   private current(actor: Actor) { return this.options.currentActor?.(actor) ?? actor }
+  list(actor: Actor, sourceId: string, pageSize: number, cursor?: string) { return this.repository.listSourceSnapshots(this.current(actor), sourceId, pageSize, cursor) }
   authorizeSession(actor: Actor, sessionId: string) { return this.session(actor, sessionId) }
   get limits() { return this.parser.limits }
   validateResult(actor: Actor, sessionId: string, raw: unknown): void {

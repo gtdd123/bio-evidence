@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { IdSchema } from '@bio-evidence/research-core'
 const Account = z.strictObject({ id: IdSchema, username: z.string().min(3).max(64), administrator: z.boolean() })
 const Login = z.strictObject({ account: Account, expiresAt: z.number().int().positive() })
+const BrowserLogin = Login.extend({ sessionBinding: IdSchema })
 const DesktopLogin = Login.extend({ token: z.string().regex(/^bio1\.[A-Za-z0-9_-]{43}$/) })
 type Fetcher = (input: string | URL | Request, init?: RequestInit) => Promise<Response>
 export class BioAuthClientError extends Error {
@@ -21,11 +22,11 @@ export function createBrowserAuthClient(origin: string, fetcher: Fetcher = fetch
     return response.json()
   }
   return {
-    login: async (username: string, password: string) => Login.parse(await call('/api/auth/login', {
+    login: async (username: string, password: string) => BrowserLogin.parse(await call('/api/auth/login', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }),
     })),
-    current: async () => z.strictObject({ account: Account }).parse(await call('/api/auth/session')),
-    logout: async () => { await call('/api/auth/logout', { method: 'POST' }) },
+    current: async (binding?: string) => z.strictObject({ account: Account, sessionBinding: IdSchema }).parse(await call('/api/auth/session', { headers: binding ? { 'X-Bio-Session-Binding': binding } : {} })),
+    logout: async (binding?: string) => { await call('/api/auth/logout', { method: 'POST', headers: binding ? { 'X-Bio-Session-Binding': binding } : {} }) },
   }
 }
 /** For the Electron main process; never persist its token in browser storage. */

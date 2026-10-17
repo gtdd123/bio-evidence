@@ -7,6 +7,7 @@
 
 import { RPC_CHANNELS } from '../shared/types'
 import type { ChannelMap } from './build-api'
+import { RESEARCH_CHANNEL_MAP } from './research-channel-map'
 
 function invoke(channel: string, transform?: (result: any) => any) {
   return { type: 'invoke' as const, channel, ...(transform && { transform }) }
@@ -17,6 +18,7 @@ function listener(channel: string) {
 }
 
 export const CHANNEL_MAP = {
+  ...RESEARCH_CHANNEL_MAP,
   // Session management
   getSessions: invoke(RPC_CHANNELS.sessions.GET),
   getUnreadSummary: invoke(RPC_CHANNELS.sessions.GET_UNREAD_SUMMARY),

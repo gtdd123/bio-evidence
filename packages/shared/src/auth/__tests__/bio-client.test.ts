@@ -4,10 +4,11 @@ describe('pure shared BioEvidence auth clients', () => {
   test('browser uses cookie credentials, strict DTO and refuses credential redirects', async () => {
     let options: RequestInit | undefined
     const client = createBrowserAuthClient('https://lab.example', async (_url, init) => {
-      options = init; return Response.json({ account: { id: 'account-a', username: 'student', administrator: false }, expiresAt: 1000 })
+      options = init; return Response.json({ account: { id: 'account-a', username: 'student', administrator: false }, expiresAt: 1000, sessionBinding: 'session-a' })
     })
     const result = await client.login('student', 'synthetic-password')
     expect(result.account.id).toBe('account-a'); expect(options?.credentials).toBe('same-origin'); expect(options?.mode).toBe('same-origin')
+    expect(result.sessionBinding).toBe('session-a')
     expect(options?.redirect).toBe('error')
     expect(JSON.parse(options!.body as string)).toEqual({ username: 'student', password: 'synthetic-password' })
   })

@@ -6,10 +6,10 @@ import type { ResearchSpaceView, ResearchMemberView, ResearchAuditEntry } from '
 import { ReportClaimSchema, ReportTitleSchema, nonBlankText } from './contracts.ts';
 import { MaterialImageRequestSchema, type MaterialImageResult, type MaterialGrantView, type MaterialRoot, type MaterialPage, type MaterialSearchResult, type MaterialDirectoryState, type MaterialAnnotation } from './materials.ts';
 import type { LiteratureSearchPage, LiteratureSelection } from './literature.ts';
-import type { DocumentIngestResult } from './documents.ts';
+import type { DocumentIngestResult, SourceSnapshotPage } from './documents.ts';
 import { CreateEvidenceRequestSchema, SaveEvidenceRequestSchema, CreateReportRequestSchema, SaveReportRequestSchema,
   type EvidenceView, type ReportView, type ArtifactExport, type ArtifactPage } from './artifacts.ts';
-import { SaveResearchConnectionSchema, type ResearchConnectionView } from './public-research.ts';
+import { SaveResearchConnectionSchema, type ResearchConnectionView, type ResearchConnectionConfiguration } from './public-research.ts';
 import { StartResearchRunSchema, type ResearchRunView } from './runs.ts';
 
 export const RESEARCH_PROTOCOL_VERSION = 1 as const;
@@ -18,6 +18,8 @@ export const RESEARCH_CHANNELS = {
   LIST_MEMBERS: 'research:v1:listMembers', INVITE_MEMBER: 'research:v1:inviteMember', SET_MEMBER: 'research:v1:setMember',
   READ_AUDIT: 'research:v1:readAudit',
   LIST_MODEL_CONNECTIONS: 'research:v1:listModelConnections', SAVE_MODEL_CONNECTION: 'research:v1:saveModelConnection',
+  GET_MODEL_CONNECTION_CONFIGURATION: 'research:v1:getModelConnectionConfiguration',
+  LIST_SOURCE_SNAPSHOTS: 'research:v1:listSourceSnapshots', LIST_ARTIFACT_REVISIONS: 'research:v1:listArtifactRevisions',
   LIST_MATERIAL_GRANTS: 'research:v1:listMaterialGrants', REGISTER_MATERIAL: 'research:v1:registerMaterial',
   LIST_MATERIALS: 'research:v1:listMaterials', GET_MATERIAL: 'research:v1:getMaterial',
   INDEX_MATERIAL_DIRECTORY: 'research:v1:indexMaterialDirectory', LIST_MATERIAL_DIRECTORY: 'research:v1:listMaterialDirectory',
@@ -39,6 +41,9 @@ export const RESEARCH_CHANNELS = {
 } as const;
 export const CreateSessionSchema = z.strictObject({ scope: ScopeSchema, name: z.string().trim().min(1).max(300), sourceIds: IdListSchema.default([]) });
 export const ResearchRequestSchemas = {
+  [RESEARCH_CHANNELS.GET_MODEL_CONNECTION_CONFIGURATION]: z.strictObject({ connectionId: IdSchema }),
+  [RESEARCH_CHANNELS.LIST_SOURCE_SNAPSHOTS]: z.strictObject({ sourceId: IdSchema, pageSize: z.number().int().min(1).max(100).default(20), cursor: IdSchema.optional() }),
+  [RESEARCH_CHANNELS.LIST_ARTIFACT_REVISIONS]: z.strictObject({ kind: z.enum(['evidence', 'report']), entityId: IdSchema, pageSize: z.number().int().min(1).max(100).default(20), cursor: IdSchema.optional() }),
   [RESEARCH_CHANNELS.LIST_MODEL_CONNECTIONS]: z.strictObject({ scope: ScopeSchema }),
   [RESEARCH_CHANNELS.SAVE_MODEL_CONNECTION]: SaveResearchConnectionSchema,
   [RESEARCH_CHANNELS.GET_MATERIAL_IMAGE]: MaterialImageRequestSchema,
@@ -99,6 +104,9 @@ export function parseResearchRequest(channel: string, input: unknown): unknown {
 }
 // Extends the existing typed RPC transport; handlers are registered only after auth integration.
 export interface ResearchRpcChannelMap {
+  'research:v1:getModelConnectionConfiguration': { args: [ResearchRequest<'research:v1:getModelConnectionConfiguration'>]; result: ResearchConnectionConfiguration };
+  'research:v1:listSourceSnapshots': { args: [ResearchRequest<'research:v1:listSourceSnapshots'>]; result: SourceSnapshotPage };
+  'research:v1:listArtifactRevisions': { args: [ResearchRequest<'research:v1:listArtifactRevisions'>]; result: ArtifactPage };
   'research:v1:listModelConnections': { args: [ResearchRequest<'research:v1:listModelConnections'>]; result: ResearchConnectionView[] };
   'research:v1:saveModelConnection': { args: [ResearchRequest<'research:v1:saveModelConnection'>]; result: ResearchConnectionView };
   'research:v1:getMaterialImage': { args: [ResearchRequest<'research:v1:getMaterialImage'>]; result: MaterialImageResult };

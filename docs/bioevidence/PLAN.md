@@ -239,6 +239,26 @@ runId、stepId、inputManifest、operationId 和取消代数绑定所有 callbac
 
 开发及首版受控服务使用同一端口（默认 9100）承载 RPC 与构建 WebUI；不沿用未被源码读取的 CRAFT_WEBUI_PORT=3100。Electron 产品默认 thin-client；没有连接配置显示服务连接/登录入口，不静默启动未受控原生后台或读取原 Craft 数据。
 
+### T15 实施细化（2026-10-16，独立审批 PASS）
+
+`/root/t14_independent_judge` 已批准以下技术细化进入实施；实施验收仍须分别检查 Spec、质量与真实双端运行证据。
+
+T15 局部审阅补充（`/root/t14_independent_judge` 独立审批 PASS）：Web 同源标签页共享 HttpOnly cookie。登录/当前账号响应提供不可用于认证的 sessionBinding；Web WS upgrade 查询参数及配置/当前账号/上传/注销请求携带预期绑定，服务端与实际 cookie 解析出的 authSessionId 比较，不匹配拒绝。携带绑定的注销只撤销该会话，不发送清 cookie 响应，避免迟到注销清除另一标签页新 cookie。连接每次重建仍固定该绑定，避免新主体数据写入旧主体草稿。桌面 bearer 仍只在主进程；sessionBinding 不替代凭据或授予权限。控制器 dispose 后永久关闭，排队及晚到 restore 不得重连。仍须真实测试证明问题关闭。
+
+- 当前旧 App 启动会调用被科研服务禁用的 legacy workspace/session API，不能直接挂科研页面。新增一份共享 BioApp 及论文/证据/报告/资料/运行面板，Web 与桌面都挂这份 renderer；复用既有 UI 控件、DataTable、主题 token、Textarea/编辑控件及 i18n，不增加 UI 框架或测试依赖。保留原 Craft 页面源码作为来源，Bio 启动不初始化其业务流程。
+- 在既有 CHANNEL_MAP/buildClientApi/ElectronAPI/Web adapter 增加完整 typed research namespace、科研事件和账户接口。共享业务页面只调用这些接口。模型连接、数据范围与公开声明在发送前可见；T14 state adapter 只因事件/重连读权威状态，未知模型请求必须明确新操作才能重试。
+- Web 账户继续使用同源 HttpOnly/SameSite cookie；不把登录 token 写入 storage。共享登录组件在未登录/到期时工作，登录成功后建立既有 WsRpcClient。账号或项目/会话切换增加 generation 并清理旧视图、订阅、预览对象 URL 和异步结果；未提交文字仅在本窗口内按已认证账号及资源隔离保留，有界且不发送模型、不进入通用缓存或诊断。修订冲突保留本人文字，读取最新版本后由用户决定如何形成新修订。
+- Electron 使用专门的 Bio thin-client main/preload 入口，复用 namespace bootstrap、既有 WsRpcClient 和 API proxy；受控构建输出 `bio-main.cjs`/`bio-preload.cjs`，renderer 入口为 `bio.html`。主进程不启动旧 embedded server、SDK 或 OAuth/browser/shell capability。每窗口账户及 bearer 仅保留在 main 私有状态，IPC 从真实 sender/mainFrame 推导窗口，不接受客户端传 webContentsId/actor；只允许 typed research 请求和必要的账户、PDF 上传、受控导出及连接操作。main 在异步返回和事件转发前重新核对窗口/账户代数，退出销毁连接和未完成访问；renderer 不能读取 token 或任意文件。
+- 桌面无配置时仅显示 HTTPS/loopback 服务地址与登录表单，默认 thin-client。显式连接时验证 origin，不接受重定向或远程明文地址。只持久化非秘密服务地址；导航/新窗口和 IPC sender 受本产品页面边界约束。本机 PDF 由用户文件选择动作提供，最大 25 MiB，再经已认证 main 发固定上传路由；预览使用授权 RPC 返回的所选图片字节，不从服务端路径读取本机文件。导出只接收已校验产物 DTO 并由本人窗口确认保存，不暴露通用 read/write/shell 桥。
+- 增加同端口科研 Web 静态适配器和认证 `/api/config`。静态根仅由受信任启动代码提供，不是 RPC 参数或任意服务文件夹；构建生成产品 marker/资源清单，服务仅提供该清单内 index 与静态资源，realpath/符号链接/路径遍历检查及 MIME/CSP/no-store 明确，排除配置、日志、目录浏览和任意文件。`/login` 进入共享 BioApp；不复用旧共享 token 登录页。配置返回已认证主体的非秘密连接信息，不提供旧 workspace 配置。完整发行包及部署位置仍在 T16 收敛，T15 先验证实际源码服务承载构建 UI。
+- 现有读取 API 缺少 UI 重连后的目录入口，增加只读 typed `listSourceSnapshots` 与 `listArtifactRevisions`，分别从当前授权 source/产物 family 绑定分页读取有界摘要，再用已有 getSnapshot/getEvidence/getReport 读选中项。每页不超过 100；请求与响应都核对原资源、作用域及权威结果，不接受客户端 scope/owner。不会用 renderer 临时缓存充当持久历史。
+- 配置者编辑连接时需要完整非秘密 scopes/model/API 配置，新增仅当前配置所有者管理员可读的 `getModelConnectionConfiguration`；严格省略 apiKey/credentialId。沿用既有保存 CAS、加密 KeyStore 和当前管理员校验，不因编辑当前项目连接而悄悄丢掉其他已授权范围。账号创建继续使用现有受控管理员 CLI，项目成员管理使用既有 RPC。
+- 论文面板支持真实检索状态、公开/默认私有 PDF 导入、来源元数据与冲突状态、读取覆盖、按 PDF 页/JATS 段定位文本和选取 UTF-16 引用。证据表/报告编辑展示结构状态与人工核对的区别、来源及依据修订变化；保存形成新修订，显式人工核对沿用后端规则。历史可按 family 分页查看，导出保持引用与状态。来自资料的文本均以安全文本/受控编辑方式呈现，不执行原文 HTML 或自动加载任意外部图片。
+- 私有资料面板仅选择已授权 grant/目录，浏览分页索引、按需索引/文本关键词查询/批注及所选帧预览；预览失败、预算、离线和帧范围有明确状态，切换回收旧图像 URL。不会把目录、备注或项目记忆自动送入云端。未接入真实 4090 数据时标为未验证，不新增训练或本地推理功能。
+- 模型管理仅对当前管理员显示；所有人只选择自己范围内启用连接及其明确模型。无连接仍能手工整理证据/报告。私有或混合会话阻止云端按钮，清楚说明新建公开会话的路径；问题/片段/证据及公开声明由用户明确选择，发送后可查看实际冻结输入清单。运行页面显示取消、明确重试、unknown、文件恢复和 covered 的实际状态，不把零默认 usage 当实际零费用。
+- 新文案沿用现有 locale 机制；中文/英文校对，其余语言新增键采用明确英文回落，保留 parity/sorted 检查。业务面板拆文件，状态控制器可单测，避免把所有逻辑放进旧 App 或单一大组件。
+- 实施依次验证：只读发现接口及连接配置授权 → 跨端账户/typed bridge/静态资源边界 → 状态控制器和草稿/冲突隔离 → 页面组件 → 构建及实际浏览器/Electron thin-client。承接 T14 的 GET 切换/分页/2 MiB 拒绝测试；再覆盖三个账号、两个项目、断连/撤权、晚到响应、私有输入阻止、文本注入、PDF/图片与导出。实际 UI 验收使用隔离服务和明确合成资料；SDK/公网模型、真实实验数据与完整包装分别记录，不用截图或 mock API 冒充真实界面链路。
+
 ## 12. 依赖、运行时和包装选择
 
 | 项目 | 决策 | 依据/范围 |
@@ -353,3 +373,9 @@ T02 的安装、SDK 隔离与构建秘密门槛已有实际通过证据；完整
 | 原 CI / 包装入口 | 原检查脚本缺文件，旧包装/发布脚本已关闭危险 dotenv/secret 出口，不能当作可用交付入口 | **T16 完成前**替换为受控的真实 CI/Windows 包装命令，执行并记录；不使用上游发布目标 |
 
 RPC 错误交付必须在 T06 前收敛，模型附件/连接运行时必须在 T13 前收敛，BrowserPane 必须在 T15 前收敛；当前定向修复已有通过记录，后续不能破坏。T17 必须重新运行全部交付支持范围的回归，关闭遗留阻断，并逐条记录 AC 和真实环境未验证项。此表是收敛责任，**不是测试豁免或交付完成证明**。
+
+## 19. T15 实施收敛记录（2026-10-17，独立审批 PASS）
+
+共用 UI、专用桌面入口、只读发现 API 和同端口有界静态资源已按第 11 节实现。角色能力逐操作对应服务端授权；listSpaces 成功移除项目或改变角色也显示固定权限提示。窗口草稿按 origin/account 隔离、4 MiB/100 项预算，满额明确拒绝而不淘汰旧稿；运行只有在冻结提交成功保留后才发送。私有批注草稿保持原 baseRevision，新修订不会自动覆盖或重基，明确对照合并/放弃才切换基准。
+
+独立评判已顺序批准主体及追加修复 Spec/代码质量、四文档一致性和 T15 阶段。真实浏览器和 Electron39 薄客户端使用正式服务/业务与合成资料，模型边界为测试替身，不能替代 T16 包装、T17 公网模型/文献验收或真实数据接入。授权推进 T16，详情见 evidence/T15-shared-ui.md。

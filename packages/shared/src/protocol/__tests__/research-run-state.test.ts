@@ -33,3 +33,38 @@ test('disconnect and close invalidate late responses; reconnect only reads state
   f.wait(); const last = f.adapter.refresh(); await new Promise(resolve => setTimeout(resolve, 0)); f.adapter.close(); f.release(); await last
   expect(f.adapter.state.page.items).toEqual([])
 })
+
+function detail(id: string) {
+  return { run: { ...run, id }, operationId: `operation-${id}`, purpose: 'evidence', manifest: { id: `manifest-${id}`, sessionId: 'session', sessionRevision: 1, scope: run.scope,
+    actorId: 'alice', declaredAt: 1, policyVersion: 1, contextHash: 'a'.repeat(64), connectionId: 'official', model: 'synthetic-gpt' },
+    input: { question: 'Public fixture', readingScope: 'selected-excerpts-only', blocks: [{ snapshotId: 'snapshot', sourceId: 'source', blockId: 'block', start: 0, end: 6,
+      text: 'public', locator: { kind: 'pdf-page', page: 1 }, coverage: 'full', totalUnits: 1, selectedUnit: 1, identifiers: {}, metadataPending: false, contentHash: 'b'.repeat(64) }], evidence: [] },
+    modelRequests: [], projectionPending: false, projectionStatus: 'none', steps: [] }
+}
+test('switching selected GET and paging drops the old detail while preserving explicit read-only recovery', async () => {
+  let release!: (value: unknown) => void, entered!: () => void
+  const started = new Promise<void>(resolve => { entered = resolve }), calls: Array<{ channel: string; input: any }> = [], selected: string[] = []
+  const adapter = new ResearchRunStateAdapter({ invoke: async (channel, input) => {
+    calls.push({ channel, input })
+    if (channel === R.LIST_RUNS) return { items: [{ ...run, id: 'run-a' }, { ...run, id: 'run-b' }], nextCursor: 'run-b' }
+    if (input.runId === 'run-a') { entered(); return new Promise(resolve => { release = resolve }) }
+    return detail('run-b')
+  }, on: () => () => {} }, 'session', state => { if (state.selected) selected.push(state.selected.run.id) })
+  const old = adapter.selectRun('run-a'); await started
+  const next = adapter.selectRun('run-b'); release(detail('run-a')); await Promise.all([old, next])
+  expect(adapter.state.selected?.run.id).toBe('run-b'); expect(selected).not.toContain('run-a')
+  await adapter.pageAfter('run-b')
+  expect(calls).toContainEqual({ channel: R.LIST_RUNS, input: { sessionId: 'session', pageSize: 20, cursor: 'run-b' } })
+  expect(calls.every(call => call.channel === R.GET_RUN || call.channel === R.LIST_RUNS)).toBe(true)
+  adapter.close()
+})
+test('response budget counts UTF-8 bytes and rejects above 2 MiB before rendering or schema decoding', async () => {
+  let response: unknown = { items: [], padding: '界'.repeat(700000) }
+  const adapter = new ResearchRunStateAdapter({ invoke: async () => response, on: () => () => {} }, 'session')
+  await adapter.refresh(); expect(adapter.state).toMatchObject({ status: 'error', page: { items: [] }, errorCode: 'BIO_MODEL_BUDGET' })
+  const empty = { items: [], padding: '' }
+  response = { ...empty, padding: 'x'.repeat(2 * 1024 * 1024 - Buffer.byteLength(JSON.stringify(empty))) }
+  expect(Buffer.byteLength(JSON.stringify(response))).toBe(2 * 1024 * 1024)
+  await adapter.refresh(); expect(adapter.state.errorCode).toBe('BIO_INPUT_INVALID')
+  adapter.close()
+})

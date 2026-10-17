@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { ResearchError, SaveResearchConnectionSchema, ResearchConnectionRecordSchema, ResearchConnectionViewSchema, parseContract, IdSchema,
+  ResearchConnectionConfigurationSchema, type ResearchConnectionConfiguration,
   type Actor, type ResearchScope, type ResearchConnectionRecord, type ResearchConnectionView } from '@bio-evidence/research-core'
 import type { SqliteResearchRepository } from './sqlite-repository'
 import { ResearchConnectionBroker } from './public-input'
@@ -26,6 +27,12 @@ export class ResearchConnectionsService {
     const record = this.repository.managedResearchConnection(this.currentActor(actor), id)
     if (!record) throw new ResearchError('BIO_CONNECTION_INVALID')
     return view(record)
+  }
+  configuration(actor: Actor, id: string): ResearchConnectionConfiguration {
+    const record = this.repository.managedResearchConnection(this.currentActor(actor), id)
+    if (!record) throw new ResearchError('BIO_CONNECTION_INVALID')
+    const { revision, credentialId, ...configuration } = deployment(record)
+    return parseContract(ResearchConnectionConfigurationSchema, { configuration, revision, keyConfigured: !!credentialId })
   }
   async save(actor: Actor, raw: unknown): Promise<ResearchConnectionView> {
     const id = parseContract(IdSchema, raw && typeof raw === 'object' ? ((raw as Record<string, unknown>).configuration as Record<string, unknown> | undefined)?.slug : undefined)

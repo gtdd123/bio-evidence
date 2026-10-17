@@ -22,12 +22,15 @@ export function createBioUserAuthProvider(auth: BioAuthService, boundary: AuthBo
     async authenticate(request, token) {
       const headers = incomingHeaders(request)
       if (!this.allowsUpgrade(request)) return null
+      let actor
       if (token !== undefined) {
         const hasCookie = (headers.get('cookie') ?? '').split(';').some(pair => pair.trim().startsWith(boundary.cookieName + '='))
         if (hasCookie || headers.has('authorization')) return null
-        return auth.authenticate(token)
-      }
-      return actorFromHeaders(auth, boundary, headers)
+        actor = auth.authenticate(token)
+      } else actor = actorFromHeaders(auth, boundary, headers)
+      const url = new URL(request.url ?? '/', boundary.publicOrigin), bindings = url.searchParams.getAll('bioBinding')
+      if (bindings.length > 1 || bindings.length && (!actor || bindings[0] !== actor.authSessionId)) return null
+      return actor
     },
     resolveActor: id => auth.resolveActor(id),
   }

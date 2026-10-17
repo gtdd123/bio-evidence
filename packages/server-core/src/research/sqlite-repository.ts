@@ -14,7 +14,7 @@ import {
   type EvidenceRevision, type ReportRevision, type AuthorityAuthSession, type ResearchEvent,
   DeploymentGrantSchema, MaterialRootSchema, MaterialDirectoryStateSchema, IndexedMaterialEntrySchema, MaterialAnnotationSchema,
   type StoredDeploymentGrant, type MaterialRoot, type MaterialDirectoryState, type IndexedMaterialEntry, type MaterialAnnotation,
-  ArtifactPageSchema,
+  ArtifactPageSchema, SourceSnapshotPageSchema,
   ResearchConnectionRecordSchema, type ResearchConnectionRecord,
   StartResearchRunSchema, PublicInputManifestSchema, ResearchRunViewSchema, type ResearchRunView,
   PublicModelInputSchema, PublicCandidateResultSchema, type PublicCandidateResult,
@@ -598,6 +598,52 @@ export class SqliteResearchRepository implements ResearchRepository {
       }),
         ...(rows.length > pageSize && last ? { nextCursor: Buffer.from(JSON.stringify({ sessionId, id: last.entity_id, kind: last.kind })).toString('base64url') } : {}) });
     });
+  }
+  listSourceSnapshots(actor: Actor, sourceId: string, pageSize: number, cursor?: string) {
+    parseContract(IdSchema, sourceId); parseContract(z.number().int().min(1).max(100), pageSize)
+    const authority = this.authorizeResource(actor, 'source', sourceId, 'read')
+    return this.tx(actor, authority.scope, 'snapshot-list', sourceId, current => {
+      this.authorize(current, authority.scope, 'read')
+      if (cursor) {
+        parseContract(IdSchema, cursor)
+        this.authorizeResource(current, 'snapshot', cursor, 'read')
+        const row = this.query<{ source: string }, [string]>("SELECT json_extract(payload,'$.sourceId') AS source FROM entities WHERE kind='snapshot' AND id=?").get(cursor)
+        if (row?.source !== sourceId) throw new ResearchError('BIO_INPUT_INVALID')
+      }
+      // Project metadata in SQLite: large block bodies never enter this catalog response.
+      const rows = this.query<{ summary: string }, [string, string, string, number]>(`SELECT json_object('id',e.id,'sourceId',json_extract(e.payload,'$.sourceId'),
+        'policy',json_extract(e.payload,'$.policy'),'format',json_extract(e.payload,'$.format'),'coverageLevel',json_extract(e.payload,'$.coverage.level'),
+        'totalUnits',json_extract(e.payload,'$.coverage.totalUnits'),'readUnits',(SELECT count(*) FROM json_each(e.payload,'$.coverage.units') u WHERE json_extract(u.value,'$.status')='read'),
+        'retrievedAt',json_extract(e.payload,'$.retrievedAt'),'contentHash',json_extract(e.payload,'$.contentHash')) AS summary
+        FROM entities e WHERE e.kind='snapshot' AND e.scope_key=? AND json_extract(e.payload,'$.sourceId')=? AND e.id>? ORDER BY e.id LIMIT ?`).all(scopeKey(authority.scope), sourceId, cursor ?? '', pageSize + 1)
+      const items = rows.slice(0, pageSize).map(row => JSON.parse(row.summary))
+      return parseContract(SourceSnapshotPageSchema, { items, ...(rows.length > pageSize ? { nextCursor: items.at(-1)!.id } : {}) })
+    })
+  }
+  listArtifactRevisions(actor: Actor, kind: 'evidence' | 'report', entityId: string, pageSize: number, cursor?: string) {
+    parseContract(z.enum(['evidence', 'report']), kind); parseContract(IdSchema, entityId); parseContract(z.number().int().min(1).max(100), pageSize)
+    const authority = this.authorizeResource(actor, kind, entityId, 'read')
+    const head = this.query<{ record_id: string }, [string, string]>('SELECT record_id FROM heads WHERE kind=? AND entity_id=?').get(kind, entityId)
+    if (!head) throw new ResearchError('BIO_ACCESS_DENIED')
+    return this.tx(actor, authority.scope, 'artifact-history', entityId, current => {
+      this.authorize(current, authority.scope, 'read')
+      let after = 0
+      if (cursor) {
+        const value = kind === 'evidence' ? parseContract(EvidenceRevisionSchema, this.get(current, kind, cursor)) : parseContract(ReportRevisionSchema, this.get(current, kind, cursor))
+        if (('evidenceId' in value ? value.evidenceId : value.reportId) !== entityId) throw new ResearchError('BIO_INPUT_INVALID')
+        after = value.revision
+      }
+      // Names are fixed enum-derived SQL identifiers; client values are bound parameters.
+      const familyPath = kind === 'evidence' ? '$.evidenceId' : '$.reportId', titlePath = kind === 'evidence' ? '$.claim' : '$.title'
+      const rows = this.query<{ summary: string }, [string, string, string, number, number]>(`SELECT json_object('id',e.id,'entityId',json_extract(e.payload,'${familyPath}'),
+        'sessionId',json_extract(e.payload,'$.sessionId'),'revision',json_extract(e.payload,'$.revision'),'title',substr(json_extract(e.payload,'${titlePath}'),1,300),
+        'policy',json_extract(e.payload,'$.policy'),'structuralStatus',json_extract(e.payload,'$.structuralStatus'),'reviewStatus',coalesce(r.decision,json_extract(e.payload,'$.reviewStatus')),
+        'authorId',json_extract(e.payload,'$.authorId'),'createdAt',json_extract(e.payload,'$.createdAt')) AS summary
+        FROM entities e LEFT JOIN reviews r ON r.kind=e.kind AND r.record_id=e.id WHERE e.kind=? AND e.scope_key=? AND json_extract(e.payload,'${familyPath}')=?
+        AND json_extract(e.payload,'$.revision')>? ORDER BY json_extract(e.payload,'$.revision') LIMIT ?`).all(kind, scopeKey(authority.scope), entityId, after, pageSize + 1)
+      const items = rows.slice(0, pageSize).map(row => { const value = JSON.parse(row.summary); value.title = value.title.slice(0, 300).replace(/[\uD800-\uDBFF]$/, ''); return { kind, value } })
+      return parseContract(ArtifactPageSchema, { items, ...(rows.length > pageSize ? { nextCursor: items.at(-1)!.value.id } : {}) })
+    })
   }
   commitArtifact(actor: Actor, kind: 'evidence' | 'report', value: EvidenceRevision | ReportRevision, expectedRevision: number) {
     if (!value.sessionId) throw new ResearchError('BIO_INPUT_INVALID');

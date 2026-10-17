@@ -25,6 +25,7 @@ export class ArtifactsService {
   }
   confirmSourceMetadata(actor: Actor, sourceId: string, expectedRevision: number) { return this.repository.artifactOperation(actor, 'source', sourceId, 'source-metadata-confirm', () => this.repository.confirmSourceMetadata(actor, sourceId, expectedRevision, Date.now())) }
   list(actor: Actor, sessionId: string, pageSize: number, cursor?: string) { return this.repository.listArtifactHeads(actor, sessionId, pageSize, cursor) }
+  history(actor: Actor, kind: 'evidence' | 'report', entityId: string, pageSize: number, cursor?: string) { return this.repository.listArtifactRevisions(actor, kind, entityId, pageSize, cursor) }
   review(actor: Actor, input: { kind: 'evidence' | 'report'; revisionId: string; expectedRevision: number; decision: 'confirmed' | 'needs-changes' }) {
     return this.repository.artifactOperation(actor, input.kind, input.revisionId, 'artifact-review', () => this.reviewContent(actor, input))
   }
