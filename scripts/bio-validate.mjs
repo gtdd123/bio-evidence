@@ -9,9 +9,24 @@ function run(args) {
 }
 run(['scripts/bio-tests.mjs', '--node']);
 const serviceTests = readdirSync(join(root, 'packages/server/src')).filter(name => /^bio-.*\.test\.ts$/.test(name) || name === 'owned-shutdown.test.ts').map(name => 'packages/server/src/' + name);
-run(['scripts/bio-launch.mjs', 'test', 'test', 'packages/research-core/src', 'packages/server-core/src/research', 'packages/shared/src/protocol/__tests__/research.test.ts', ...serviceTests]);
+const researchTests = [
+  'packages/research-core/src', 'packages/server-core/src/research',
+  'packages/server-core/src/transport/__tests__/user-session-url.test.ts',
+  'packages/shared/src/auth/__tests__/bio-client.test.ts',
+  'packages/shared/src/protocol/__tests__', 'packages/shared/src/i18n/__tests__',
+  'packages/shared/src/agent/backend/__tests__/public-research.test.ts',
+  'packages/shared/src/credentials/backends/secure-storage-atomic.test.ts',
+  'packages/shared/src/sessions/__tests__/persistence-durability.test.ts',
+  'packages/shared/src/sessions/__tests__/persistence-queue.test.ts',
+  'apps/electron/src/renderer/bio', 'apps/electron/src/main/bio-window-access.test.ts',
+  'apps/electron/src/transport/bio-client.test.ts', 'apps/electron/src/transport/bio-api.test.ts',
+  'apps/electron/src/transport/bio-http.test.ts',
+];
+run(['scripts/bio-launch.mjs', 'test', 'test', ...researchTests, ...serviceTests]);
 run(['scripts/bio-launch.mjs', 'bootstrap', 'run', 'typecheck:all']);
+run(['scripts/bio-launch.mjs', 'bootstrap', 'run', 'tsc', '--noEmit', '-p', 'packages/research-core/tsconfig.json']);
 run(['scripts/bio-launch.mjs', 'bootstrap', 'run', 'tsc', '--noEmit', '-p', 'apps/webui/tsconfig.json']);
+run(['scripts/bio-launch.mjs', 'bootstrap', 'run', 'tsc', '--noEmit', '--module', 'esnext', '--moduleResolution', 'bundler', '--target', 'esnext', '--types', 'bun,node', '--allowJs', '--esModuleInterop', '--skipLibCheck', '--strict', 'scripts/bio-desktop-package.ts', 'scripts/bio-server-package.ts', 'scripts/bio-electron-build.ts']);
 run(['scripts/bio-launch.mjs', 'build', 'run', 'scripts/bio-renderer-build.ts', 'web']);
 run(['scripts/bio-launch.mjs', 'build', 'run', 'scripts/bio-electron-build.ts']);
 run(['scripts/bio-launch.mjs', 'build', 'run', 'scripts/bio-renderer-build.ts', 'desktop']);

@@ -241,6 +241,7 @@
   "bio.noAbstract": "No readable abstract returned.",
   "bio.noArtifacts": "No artifacts on this page.",
   "bio.noConnectionHelp": "No enabled connection is available here. You can still organize evidence and reports manually.",
+  "bio.noMaterialsConnected": "No material directory is connected to this space. A space owner or project owner can register an administrator-authorized directory; experimental servers are not connected automatically.",
   "bio.noReadableText": "No readable text in this snapshot.",
   "bio.noWorkspaces": "No accessible workspaces.",
   "bio.noteConflict": "A newer note was saved. Your draft keeps its original revision; compare and merge before saving.",

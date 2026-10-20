@@ -241,6 +241,7 @@
   "bio.noAbstract": "未返回可读摘要。",
   "bio.noArtifacts": "本页暂无产物。",
   "bio.noConnectionHelp": "该工作区暂无可用连接，仍可手工整理证据与报告。",
+  "bio.noMaterialsConnected": "当前空间尚未接入资料目录。由空间所有者或项目负责人登记管理员预授权的目录后即可浏览；平台不会自动连接实验服务器。",
   "bio.noReadableText": "该快照暂无可读文本。",
   "bio.noWorkspaces": "暂无可访问工作区。",
   "bio.noteConflict": "批注已有更新。当前草稿保留原修订基准，请对照合并后保存。",
