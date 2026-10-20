@@ -1,27 +1,26 @@
 {
   "name": "@craft-agent/server",
-  "version": "0.11.4",
-  "description": "Standalone headless Craft Agent server (Bun runtime)",
+  "version": "0.1.0",
+  "description": "BioEvidence account-authorized research service",
   "type": "module",
-  "main": "src/index.ts",
+  "main": "src/bio-index.ts",
   "bin": {
-    "craft-server": "src/index.ts"
+    "bio-evidence-server": "src/bio-index.ts"
   },
   "files": [
     "src/"
   ],
   "engines": {
-    "bun": ">=1.0.0"
+    "bun": "1.3.10"
   },
   "author": {
-    "name": "Craft Docs Ltd.",
-    "email": "support@craft.do"
+    "name": "BioEvidence contributors"
   },
   "license": "Apache-2.0",
-  "homepage": "https://agents.craft.do",
+  "homepage": "https://github.com/gtdd123/bio-evidence",
   "scripts": {
-    "start": "bun run src/index.ts",
-    "generate-token": "bun run src/index.ts --generate-token",
+    "start": "node ../../scripts/bio-start.mjs server",
+    "generate-token": "node ../../scripts/bio-disabled-entry.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

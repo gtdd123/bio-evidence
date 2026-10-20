@@ -3,7 +3,7 @@ import { buildNamespaceEnv, assertBioEvidenceRuntime } from '../packages/shared/
 import { PINNED_BUN_VERSION } from './bio-launch.mjs';
 
 const BUILD_ENV_KEYS = [
-  'PATH', 'Path', 'PATHEXT', 'SystemRoot', 'SYSTEMROOT', 'WINDIR', 'COMSPEC',
+  'PATH', 'Path', 'PATHEXT', 'SystemRoot', 'SYSTEMROOT', 'SystemDrive', 'WINDIR', 'COMSPEC',
   'ProgramFiles', 'ProgramFiles(x86)', 'ProgramW6432', 'PROCESSOR_ARCHITECTURE',
   'NUMBER_OF_PROCESSORS', 'BUN_INSTALL_CACHE_DIR', 'BUN_TMPDIR',
 ];

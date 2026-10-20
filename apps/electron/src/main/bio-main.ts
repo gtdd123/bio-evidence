@@ -13,6 +13,7 @@ import { desktopBioAuthDriver } from './bio-desktop-auth'
 import { assertBioWindowSender } from './bio-window-access'
 
 const rendererPath = join(__dirname, 'renderer', 'bio.html'), rendererUrl = pathToFileURL(rendererPath).href
+app.setAppUserModelId('com.gtdd123.bioevidence')
 const originFile = () => validateNamespacePath(join(resolveConfigDir(), 'bio-desktop.json'))
 function savedOrigin() {
   try { const path = originFile(); if (!existsSync(path) || statSync(path).size > 4096) return ''; return validatedAuthOrigin(z.strictObject({ origin: z.string() }).parse(JSON.parse(readFileSync(path, 'utf8'))).origin) } catch { return '' }
@@ -69,7 +70,7 @@ handle('bio:saveExport', async (entry, raw) => {
   await writeFile(selected.filePath, value.content, { encoding: 'utf8', mode: 0o600 }); return { saved: true }
 })
 export async function createBioWindow() {
-  const window = new BrowserWindow({ width: 1360, height: 900, minWidth: 900, minHeight: 650, title: 'BioEvidence', backgroundColor: '#f6f7f9',
+  const window = new BrowserWindow({ width: 1360, height: 900, minWidth: 900, minHeight: 650, title: 'BioEvidence', backgroundColor: '#f6f7f9', icon: join(__dirname, 'bio.png'),
     webPreferences: { preload: join(__dirname, 'bio-preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true } })
   const client = new BioClientController(desktopBioAuthDriver, savedOrigin())
   const senderId = window.webContents.id

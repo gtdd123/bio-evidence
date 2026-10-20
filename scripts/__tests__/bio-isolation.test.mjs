@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import * as actualFs from 'node:fs';
 import { stripTypeScriptTypes } from 'node:module';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';
@@ -12,24 +13,27 @@ const fakeHome = path.join(root, '.runtime', 'fake-home');
 const bioRoot = path.join(root, '.runtime', 'bio-test');
 const bioEnv = { BIOEVIDENCE_MODE: '1', BIOEVIDENCE_CONFIG_DIR: bioRoot, CRAFT_CONFIG_DIR: bioRoot };
 
-// The VM never imports SDKs or real fs/os. Only source text is read from this
-// new repository; all application filesystem calls use this in-memory double.
+// No SDKs are imported. Default application fs/os calls use doubles; the
+// explicit owned-junction regression injects only its real filesystem facade.
 async function isolated(relativeFile, env = bioEnv, mocks = {}, observeCalls) {
   const calls = [];
   const files = new Map([[path.join(fakeHome, '.claude.json.backup'), 'old'], [path.join(fakeHome, '.claude.json.corrupted.fixture'), 'old']]);
   observeCalls?.(calls);
   const fs = {};
-  for (const name of ['existsSync', 'readFileSync', 'writeFileSync', 'renameSync', 'unlinkSync', 'appendFileSync', 'mkdirSync', 'statSync', 'readdirSync', 'rmSync']) {
+  for (const name of ['existsSync', 'readFileSync', 'writeFileSync', 'renameSync', 'unlinkSync', 'appendFileSync', 'mkdirSync', 'statSync', 'lstatSync', 'readdirSync', 'rmSync', 'openSync', 'fsyncSync', 'closeSync']) {
     fs[name] = (...args) => {
       calls.push({ operation: name, path: String(args[0]), value: args[1] });
-      if (name === 'existsSync') return files.has(String(args[0]));
+      if (name === 'existsSync') return files.has(String(args[0])) || path.parse(String(args[0])).root === String(args[0]);
       if (name === 'readFileSync') { if (!files.has(String(args[0]))) throw new Error('ENOENT'); return files.get(String(args[0])); }
       if (name === 'writeFileSync' || name === 'appendFileSync') files.set(String(args[0]), String(args[1]));
+      if (name === 'mkdirSync') files.set(String(args[0]), '');
       if (name === 'unlinkSync') files.delete(String(args[0]));
       if (name === 'statSync') return { mtimeMs: 0, size: 0 };
+      if (name === 'lstatSync') return { isSymbolicLink: () => false };
       if (name === 'readdirSync') return ['.claude.json.corrupted.fixture'];
     };
   }
+  fs.realpathSync = Object.assign(value => value, { native: value => { calls.push({ operation: 'realpathSync', path: String(value) }); return String(value); } });
   const context = createContext({ process: { env: { ...env }, argv: ['node', '--debug'], platform: process.platform, versions: {}, cwd: () => root }, console, Buffer, Date, Map, Set, URL, TextEncoder, TextDecoder });
   const cache = new Map();
   async function moduleFor(filename) {
@@ -46,7 +50,7 @@ async function isolated(relativeFile, env = bioEnv, mocks = {}, observeCalls) {
       if (!values && key === 'path') values = path;
       if (!values && key === 'crypto') values = crypto;
       if (!values && specifier === '@craft-agent/shared/config/namespace') return moduleFor(path.join(root, 'packages/shared/src/config/namespace.mjs'));
-      if (!values && /(?:namespace\.mjs|bio-runtime-guard\.mjs|config\/paths(?:\.ts)?)$/.test(specifier)) return moduleFor(path.resolve(path.dirname(referencing.identifier), specifier));
+      if (!values && /(?:namespace\.mjs|bio-desktop-env\.mjs|bio-runtime-guard\.mjs|config\/paths(?:\.ts)?)$/.test(specifier)) return moduleFor(path.resolve(path.dirname(referencing.identifier), specifier));
       if (!values) throw new Error(`Unprepared dependency denied: ${specifier}`);
       return new SyntheticModule(Object.keys(values), function () { for (const [name, value] of Object.entries(values)) this.setExport(name, value); }, { context });
     });
@@ -245,8 +249,21 @@ test('Electron bootstrap profiles are inside namespace and never mutate host HOM
   const original = { ...env };
   const profiles = [];
   const { calls, environment } = await isolated('apps/electron/src/main/bio-bootstrap.mjs', env, { electron: { app: { setName: () => {}, setPath: (name, directory) => profiles.push({ name, directory }) } } });
-  assert.deepEqual(environment, original);
+  assert.deepEqual({ ...env }, original); // Compare values across VM realms; caller is unchanged.
+  assert.equal(environment.HOME, original.HOME);
+  assert.equal(environment.CODEX_HOME, undefined); // Only the child copy is filtered.
   assert.equal(profiles.length, 3);
   assert.equal(profiles.every(p => p.directory.startsWith(bioRoot + path.sep)), true);
-  assert.equal(calls.every(c => c.path.startsWith(bioRoot + path.sep)), true);
+  assert.equal(calls.filter(c => ['mkdirSync', 'writeFileSync', 'appendFileSync'].includes(c.operation)).every(c => c.path === bioRoot || c.path.startsWith(bioRoot + path.sep)), true);
+  assert.equal(calls.some(c => c.path === fakeHome || c.path.startsWith(fakeHome + path.sep)), false);
+});
+
+test('Electron bootstrap rejects a redirected appData ancestor before creating any product directory', async t => {
+  const parent = path.join(root, '.runtime/bootstrap-boundary'); actualFs.mkdirSync(parent, { recursive: true });
+  const fixture = actualFs.mkdtempSync(path.join(parent, 'owned-')), outside = path.join(fixture, 'outside'), link = path.join(fixture, 'appdata');
+  actualFs.mkdirSync(outside); actualFs.symlinkSync(outside, link, process.platform === 'win32' ? 'junction' : 'dir');
+  t.after(() => { const offset = path.relative(actualFs.realpathSync.native(parent), actualFs.realpathSync.native(fixture)); assert.ok(offset && offset !== '..' && !offset.startsWith('..' + path.sep) && !path.isAbsolute(offset)); actualFs.rmSync(fixture, { recursive: true, force: true }); });
+  const fs = Object.fromEntries(['existsSync', 'lstatSync', 'mkdirSync', 'realpathSync'].map(name => [name, actualFs[name]]));
+  await assert.rejects(isolated('apps/electron/src/main/bio-bootstrap.mjs', {}, { fs, electron: { app: { isPackaged: true, getPath: () => link, setName() {}, setPath() {} } } }), /symlink|redirect/);
+  assert.equal(actualFs.existsSync(path.join(outside, 'BioEvidence')), false);
 });

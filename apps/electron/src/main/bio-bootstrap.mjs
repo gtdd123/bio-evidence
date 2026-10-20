@@ -1,14 +1,12 @@
 // Evaluate before Electron modules can use cookies, caches or log profiles.
-import '../../../../scripts/bio-runtime-guard.mjs';
 import { app } from 'electron';
-import { mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { createBioDesktopEnv, prepareBioDesktopDirectories } from './bio-desktop-env.mjs';
 import { resolveConfigDir } from '../../../../packages/shared/src/config/namespace.mjs';
 
+const isolated = createBioDesktopEnv(process.env, { packaged: app.isPackaged, appData: app.isPackaged && process.env.BIOEVIDENCE_MODE !== '1' ? app.getPath('appData') : '' });
+for (const key of Object.keys(process.env)) if (!Object.hasOwn(isolated, key)) delete process.env[key];
+Object.assign(process.env, isolated);
 const root = resolveConfigDir();
+const profiles = prepareBioDesktopDirectories(root);
 app.setName('BioEvidence');
-for (const [name, folder] of Object.entries({ userData: 'electron', sessionData: 'electron-session', logs: 'logs' })) {
-  const directory = join(root, folder);
-  mkdirSync(directory, { recursive: true });
-  app.setPath(name, directory);
-}
+for (const [name, directory] of Object.entries(profiles)) app.setPath(name, directory);

@@ -29,7 +29,7 @@ export class PublicModelWorkerService {
     const inside = (value: string) => { const offset = relative(parentReal, value); return !!offset && offset !== '..' && !offset.startsWith(`..${sep}`) && !isAbsolute(offset) }
     if (!inside(rootReal)) throw new ResearchError('BIO_ACCESS_DENIED')
     const allowed: Record<string, string> = {}
-    for (const key of ['PATH', 'Path', 'SystemRoot', 'WINDIR', 'TEMP', 'TMP']) if (process.env[key]) allowed[key] = process.env[key]!
+    for (const key of ['PATH', 'Path', 'SystemRoot', 'SystemDrive', 'WINDIR', 'TEMP', 'TMP']) if (process.env[key]) allowed[key] = process.env[key]!
     const env = buildNamespaceEnv({ ...allowed, BIOEVIDENCE_MODE: '1', BIOEVIDENCE_CONFIG_DIR: rootReal, CRAFT_CONFIG_DIR: rootReal })
     let child: ReturnType<typeof Bun.spawn> | undefined, timer: ReturnType<typeof setTimeout> | undefined, timedOut = false
     const kill = () => { try { child?.kill('SIGKILL') } catch {} }

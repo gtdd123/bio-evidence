@@ -1,0 +1,16 @@
+import { createServer } from 'node:net';
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { createBioStartSpec, superviseBioProcess } from '../../../../scripts/bio-start.mjs';
+const spec = createBioStartSpec('server', 'test');
+if (process.argv.includes('--track-stop')) spec.args[2] = join(spec.cwd, 'packages/server/src/__fixtures__/tracked-owned-service.ts');
+if (process.argv.includes('--hang')) spec.args[2] = join(spec.cwd, 'packages/server/src/__fixtures__/hung-owned-service.ts');
+const probe = createServer();
+await new Promise(resolve => probe.listen(0, '127.0.0.1', resolve));
+const port = probe.address().port;
+await new Promise(resolve => probe.close(resolve));
+writeFileSync(join(spec.stateRoot, 'service.json'), JSON.stringify({ port }));
+const owner = superviseBioProcess(spec, 'server', { controlledInput: true });
+console.log('BIOEVIDENCE_TEST_CHILD_PID=' + owner.child.pid);
+console.log('BIOEVIDENCE_TEST_ROOT=' + JSON.stringify(spec.stateRoot));
+await owner.exited;

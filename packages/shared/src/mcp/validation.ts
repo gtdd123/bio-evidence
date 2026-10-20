@@ -10,6 +10,8 @@ import { CraftMcpClient } from './client.js';
 import { debug } from '../utils/debug.ts';
 import { normalizeMcpUrl } from '../sources/server-builder.ts';
 import type { McpTransport } from '../sources/types.ts';
+import { statSync } from 'node:fs';
+import { delimiter, join, resolve } from 'node:path';
 
 export interface InvalidProperty {
   toolName: string;
@@ -315,6 +317,24 @@ export async function validateStdioMcpConnection(
   config: StdioValidationConfig
 ): Promise<McpValidationResult> {
   const { command, args = [], env = {}, timeout = 30000 } = config;
+
+  // Windows may report a missing executable as localized cmd stderr followed
+  // by "Connection closed". Resolve absence without launching a second server.
+  const mergedEnv = { ...process.env, ...env };
+  const windows = process.platform === 'win32';
+  const values = (name: string) => Object.entries(mergedEnv).filter(([key]) => windows ? key.toUpperCase() === name : key === name).flatMap(([, value]) => value ? [value] : []);
+  const directories = [...(windows ? [process.cwd()] : []), ...values('PATH').flatMap(value => value.split(delimiter))].map(directory => windows ? directory.replace(/^"(.*)"$/, '$1') : directory);
+  const bases = /[\\/]/.test(command) ? [resolve(command)] : directories.map(directory => join(directory, command));
+  const extensions = windows ? ['', ...(values('PATHEXT').join(';') || '.COM;.EXE;.BAT;.CMD').split(';')] : [''];
+  let missing = bases.length > 0;
+  for (const base of bases) {
+    for (const extension of extensions) {
+      try { statSync(base + extension); missing = false; break; }
+      catch (error) { if (!['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) { missing = false; break; } }
+    }
+    if (!missing) break;
+  }
+  if (missing) return { success: false, errorType: 'failed', error: `Command not found: "${command}". Install the required dependency and try again.` };
 
   // Two-watchdog connect phase. Most "MCP doesn't work" failures never
   // complete the `initialize` handshake, so we want fast diagnostics — but

@@ -7,6 +7,7 @@ import { SpaceDesk } from './SpaceDesk'
 import { ModelSettings } from './ModelSettings'
 import { spaceAccessChanged } from './capabilities'
 import './bio.css'
+import logo from '../../../branding/bio.svg'
 export default function BioApp({ host }: { host: BioHostApi }) {
   const t = useBioT(), { i18n } = useTranslation(), vault = useMemo(() => new BioDraftVault(), [])
   const [state, setState] = useState<BioClientState>({ origin: '', account: null, status: 'signed-out', epoch: 0 })
@@ -23,7 +24,7 @@ export default function BioApp({ host }: { host: BioHostApi }) {
     return () => { live = false; unsubscribe(); clearInterval(timer) }
   }, [host])
   return <div className="bio-shell">
-    <header className="bio-header"><a className="bio-brand" href="#" onClick={event => event.preventDefault()}><span className="bio-mark">B</span>BioEvidence<span className="bio-beta">RESEARCH WORKSPACE</span></a>
+    <header className="bio-header"><a className="bio-brand" href="#" onClick={event => event.preventDefault()}><img className="bio-mark" src={logo} alt="" />BioEvidence<span className="bio-beta">RESEARCH WORKSPACE</span></a>
       <div className="bio-row"><select aria-label={t('language')} value={i18n.resolvedLanguage?.startsWith('zh') ? 'zh-Hans' : 'en'} onChange={event => { void i18n.changeLanguage(event.target.value) }}><option value="zh-Hans">简体中文</option><option value="en">English</option></select>
         {state.account && <><span>{state.account.username}</span><Button variant="outline" size="sm" onClick={() => { setPassword(''); void host.account.logout() }}>{t('logout')}</Button></>}</div>
     </header>

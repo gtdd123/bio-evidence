@@ -24,7 +24,7 @@ export class ImageDecodeService {
     if (signal?.aborted) return { status: 'unavailable' }
     const workerPath = this.options.workerPath ?? fileURLToPath(new URL('./image-preview-worker.ts', import.meta.url))
     const env: Record<string, string> = {}
-    for (const key of ['PATH', 'Path', 'SystemRoot', 'WINDIR', 'TEMP', 'TMP']) if (process.env[key]) env[key] = process.env[key]!
+    for (const key of ['PATH', 'Path', 'SystemRoot', 'SystemDrive', 'WINDIR', 'TEMP', 'TMP']) if (process.env[key]) env[key] = process.env[key]!
     const childEnv = buildNamespaceEnv({ ...env, BIOEVIDENCE_MODE: '1', BIOEVIDENCE_CONFIG_DIR: resolveConfigDir(), CRAFT_CONFIG_DIR: resolveConfigDir() })
     let child: ReturnType<typeof Bun.spawn> | undefined, timer: ReturnType<typeof setTimeout> | undefined, timedOut = false, aborted = false
     const stop = () => { try { child?.kill('SIGKILL') } catch { /* Already exited. */ } }

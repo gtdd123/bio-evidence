@@ -1,12 +1,31 @@
 import { describe, expect, it } from 'bun:test'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { writeFileSync, mkdtempSync, unlinkSync, rmdirSync } from 'node:fs'
+import { resolveConfigDir } from '../../config/namespace.mjs'
 import { validateStdioMcpConnection } from '../validation.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const FIXTURE = (name: string) => join(HERE, 'fixtures', name)
 
 describe('validateStdioMcpConnection', () => {
+  it.skipIf(process.platform !== 'win32')('preserves valid commands in a quoted PATH directory understood by the installed SDK', async () => {
+    const node = Bun.which('node'); if (!node) throw Error('Existing Node runtime required')
+    const directory = mkdtempSync(join(resolveConfigDir(), 'quoted mcp path ')), command = `bio-mcp-${crypto.randomUUID()}`
+    const executable = join(directory, command + '.cmd')
+    writeFileSync(executable, `@echo off\r\n"${node}" %*\r\n`)
+    const pathKey = Object.keys(process.env).find(key => key.toUpperCase() === 'PATH') ?? 'PATH'
+    try {
+      const result = await validateStdioMcpConnection({ command, args: [FIXTURE('mcp-server-good.mjs')], env: { [pathKey]: `"${directory}"` }, timeout: 8000 })
+      expect(result.error).toBeUndefined(); expect(result.success).toBe(true); expect(result.tools).toEqual(['echo'])
+    } finally { unlinkSync(executable); rmdirSync(directory) }
+  }, 15000)
+  it('classifies a missing PATH command without relying on localized Windows shell stderr', async () => {
+    const result = await validateStdioMcpConnection({ command: 'bioevidence-nonexistent-mcp-command-987654321', timeout: 3000 })
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('Command not found')
+    expect(result.error).toContain('bioevidence-nonexistent-mcp-command-987654321')
+  }, 10000)
   it(
     'returns success and tool list for a spec-compliant stdio server',
     async () => {

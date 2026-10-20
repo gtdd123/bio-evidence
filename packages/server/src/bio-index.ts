@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import '../../../scripts/bio-runtime-guard.mjs'
 import { readFileSync, existsSync, realpathSync } from 'node:fs'
+import { createOwnedShutdown, finishOwnedShutdown } from './owned-shutdown'
 import { join, resolve, relative, sep, isAbsolute } from 'node:path'
 import { z } from 'zod'
 import { resolveConfigDir, validateNamespacePath } from '@craft-agent/shared/config/namespace'
@@ -116,9 +117,11 @@ export async function startBioServer(options: { uiRoot?: string } = {}) {
 }
 if (import.meta.main) {
   try {
+    if (process.argv.slice(2).some(argument => argument !== '--control-stdio')) throw Error('Unknown service argument')
     const instance = await startBioServer()
     console.log(`BioEvidence account service: ${instance.boundary.publicOrigin}`)
-    const shutdown = () => { void instance.stop().then(() => process.exit(0)).catch(() => process.exit(1)) }
+    const control = createOwnedShutdown(instance.stop, finishOwnedShutdown, process.argv.includes('--control-stdio') ? process.stdin : undefined)
+    const shutdown = () => { void control.request(0) }
     process.once('SIGINT', shutdown)
     process.once('SIGTERM', shutdown)
   } catch { console.error('BioEvidence service could not start. Check service settings, TLS and the owned data directory.'); process.exitCode = 1 }

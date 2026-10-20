@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildNamespaceEnv, getSdkPaths } from '../packages/shared/src/config/namespace.mjs';
@@ -10,7 +10,7 @@ const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const PURPOSES = new Set(['bootstrap', 'install', 'test', 'build', 'runtime']);
 const COMMANDS = new Set(['run', 'test', 'install', 'build', '--version', '--help']);
 const OS_ENV_KEYS = [
-  'PATH', 'Path', 'PATHEXT', 'SystemRoot', 'SYSTEMROOT', 'WINDIR', 'COMSPEC',
+  'PATH', 'Path', 'PATHEXT', 'SystemRoot', 'SYSTEMROOT', 'SystemDrive', 'WINDIR', 'COMSPEC',
   'TEMP', 'TMP', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA',
   'ProgramFiles', 'ProgramFiles(x86)', 'ProgramW6432',
   'PROCESSOR_ARCHITECTURE', 'NUMBER_OF_PROCESSORS',
@@ -97,16 +97,29 @@ export function createLaunchSpec({ projectRoot, executable, purpose, args, baseE
   return { executable, args: isolatedArgs, cwd: root, env, stateRoot };
 }
 
-export function launch({ purpose, args, projectRoot = PROJECT_ROOT }) {
+export function prepareLaunch({ purpose, args, projectRoot = PROJECT_ROOT }) {
   rejectAutoEnvFiles(projectRoot);
   const executable = readPinnedRuntime(projectRoot);
   const spec = createLaunchSpec({ projectRoot, executable, purpose, args,
     ...(purpose === 'test' ? { testInvocationId: randomUUID() } : {}),
   });
   const sdk = getSdkPaths(spec.env);
-  for (const directory of [spec.stateRoot, spec.env.BUN_INSTALL_CACHE_DIR, spec.env.BUN_TMPDIR, spec.env.TEMP, sdk.home, sdk.claude, sdk.pi, sdk.xdg, spec.env.XDG_CONFIG_HOME, spec.env.XDG_DATA_HOME, spec.env.XDG_CACHE_HOME, spec.env.XDG_STATE_HOME, spec.env.APPDATA, spec.env.LOCALAPPDATA]) {
+  const directories = [spec.stateRoot, spec.env.BUN_INSTALL_CACHE_DIR, spec.env.BUN_TMPDIR, spec.env.TEMP, sdk.home, sdk.claude, sdk.pi, sdk.xdg, spec.env.XDG_CONFIG_HOME, spec.env.XDG_DATA_HOME, spec.env.XDG_CACHE_HOME, spec.env.XDG_STATE_HOME, spec.env.APPDATA, spec.env.LOCALAPPDATA];
+  const same = (a, b) => process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
+  // Preflight every destination before the first mkdir. The launcher runs
+  // before the packager's own output guard, so it must also refuse redirects.
+  for (const directory of directories) {
     assertInside(join(projectRoot, '.runtime'), directory, 'Owned runtime directory');
+    let existing = resolve(directory);
+    while (!existsSync(existing)) { const parent = dirname(existing); if (parent === existing) throw Error('Runtime directory has no existing ancestor'); existing = parent; }
+    for (;;) {
+      if (lstatSync(existing).isSymbolicLink() || !same(realpathSync.native(existing), resolve(existing))) throw Error('Owned runtime directory cannot redirect through a symlink');
+      const parent = dirname(existing); if (parent === existing) break; existing = parent;
+    }
+  }
+  for (const directory of directories) {
     mkdirSync(directory, { recursive: true });
+    if (lstatSync(directory).isSymbolicLink() || !same(realpathSync.native(directory), resolve(directory))) throw Error('Runtime directory changed during initialization');
   }
   // Version-only probe runs outside the repository and does not execute an
   // application, package lifecycle, or SDK.
@@ -116,6 +129,11 @@ export function launch({ purpose, args, projectRoot = PROJECT_ROOT }) {
   if (version.status !== 0 || version.stdout.trim() !== PINNED_BUN_VERSION) {
     throw new Error('Pinned Bun version check failed');
   }
+  return spec;
+}
+
+export function launch(options) {
+  const spec = prepareLaunch(options);
   const child = spawnSync(spec.executable, spec.args, {
     cwd: spec.cwd, env: spec.env, stdio: 'inherit', windowsHide: true,
   });

@@ -4,6 +4,8 @@ This file accumulates release notes for the next unreleased version. PRs that ad
 
 ## Features
 
+- **BioEvidence research workspace** — Dedicated account-authorized Web and desktop entry points, public literature evidence and citation reports, local private material previews, and persistent research runs. Delivery and live-service acceptance status are documented in the BioEvidence README and stage evidence.
+
 ## Improvements
 
 ## Bug Fixes
