@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="400" viewBox="0 0 1280 400" role="img" aria-labelledby="title desc">
+  <title id="title">BioEvidence — research with traceable evidence</title>
+  <desc id="desc">BioEvidence 科研工作区：公开文献、可追溯证据与私有资料边界。示意流程，不是产品截图。</desc>
+  <defs>
+    <linearGradient id="bg" x2="1" y2="1"><stop stop-color="#f4faf7"/><stop offset="1" stop-color="#e1f0e9"/></linearGradient>
+    <pattern id="dots" width="22" height="22" patternUnits="userSpaceOnUse"><circle cx="2" cy="2" r="1" fill="#166b5b" opacity=".09"/></pattern>
+    <linearGradient id="line"><stop stop-color="#166b5b"/><stop offset="1" stop-color="#93c7a7"/></linearGradient>
+  </defs>
+  <rect width="1280" height="400" rx="24" fill="url(#bg)"/>
+  <rect width="1280" height="400" rx="24" fill="url(#dots)"/>
+  <circle cx="1240" cy="20" r="235" fill="#c5e3d2" opacity=".35"/>
+  <g font-family="Segoe UI,Arial,Noto Sans SC,Microsoft YaHei,sans-serif">
+    <rect x="52" y="49" width="56" height="56" rx="14" fill="#166b5b"/>
+    <g transform="translate(57 54) scale(.18)"><path d="M75 55h56c34 0 53 17 53 43 0 14-7 26-18 32 17 6 27 18 27 37 0 29-22 45-57 45H75V55Zm34 29v33h22c13 0 20-6 20-17s-7-16-21-16h-21Zm0 61v37h25c16 0 24-6 24-18s-8-19-24-19h-25Z" fill="#fff"/><circle cx="198" cy="55" r="15" fill="#a5e3bb"/></g>
+    <text x="124" y="87" fill="#153f37" font-size="37" font-weight="700" letter-spacing="-1">BioEvidence</text>
+    <text x="54" y="166" fill="#123a33" font-size="36" font-weight="700">从公开文献，到可追溯的科研证据。</text>
+    <text x="55" y="207" fill="#52746a" font-size="17">RESEARCH WITH TRACEABLE EVIDENCE</text>
+    <text x="55" y="251" fill="#42685d" font-size="18">文献读取 · 原文定位 · 引用报告 · 私有资料浏览</text>
+    <g font-size="12" font-weight="600" fill="#236354">
+      <rect x="54" y="300" width="116" height="31" rx="15" fill="#d6eadd"/><text x="77" y="320">WEB + DESKTOP</text>
+      <rect x="181" y="300" width="130" height="31" rx="15" fill="#d6eadd"/><text x="199" y="320">PUBLIC / PRIVATE</text>
+      <rect x="322" y="300" width="144" height="31" rx="15" fill="#fff" stroke="#d7e5dd"/><text x="339" y="320">DEVELOPER PREVIEW</text>
+    </g>
+    <path d="M856 131v158m0-158h80m-80 80h80m-80 78h80" fill="none" stroke="url(#line)" stroke-width="2"/>
+    <g fill="#fff" stroke="#cee2d6">
+      <rect x="764" y="69" width="200" height="79" rx="13"/>
+      <rect x="926" y="175" width="270" height="79" rx="13"/>
+      <rect x="764" y="279" width="216" height="73" rx="13"/>
+    </g>
+    <g font-size="12" fill="#718b80"><text x="785" y="93">01 / READ</text><text x="947" y="199">02 / TRACE</text><text x="785" y="302">03 / REVIEW</text></g>
+    <g font-size="18" font-weight="600" fill="#214d40"><text x="785" y="123">公开论文与读取快照</text><text x="947" y="229">原文片段 → 证据 → 引用</text><text x="785" y="331">保留修订，人工核对</text></g>
+    <circle cx="856" cy="211" r="5" fill="#166b5b"/><circle cx="856" cy="263" r="5" fill="#93c7a7"/>
+    <text x="1078" y="366" fill="#738c80" font-size="11">A RESEARCH WORKSPACE</text>
+  </g>
+</svg>
