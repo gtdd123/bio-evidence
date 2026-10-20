@@ -4,7 +4,7 @@
 
 日期：2026-10-09（Asia/Shanghai）
 
-状态（2026-10-20）：T00–T16阶段已独立审批PASS；T17本机checkpoint已审批并提交f9cd6a1，真实模型与生产公网仍未通过。用户最新明确授权先美化README并公开GitHub源码，按PLAN22进入T18开发预览交付，README与公开内容检查/审阅进行中；不将T17改为全PASS，不宣称全部原Craft基线通过。见 evidence/T17-acceptance.md 与PLAN22。
+状态（2026-10-20）：T00–T16阶段已独立审批PASS；T17本机checkpoint已审批并提交f9cd6a1，真实模型与生产公网仍未通过。按用户最新授权与PLAN22，T18公开源码开发预览已独立终审PASS并交付 https://github.com/gtdd123/bio-evidence；首次推送e14fccd及22个提交的派生历史，远端SHA/资产和实际README渲染已核对，普通记录随后同步。不将T17改为全PASS，不宣称全部原Craft基线或远端CI通过。见 evidence/T18-publication.md 与 evidence/T17-acceptance.md。
 
 依据：已批准需求、Constitution、Spec 0.1.0、Plan 0.1.0
 
@@ -345,3 +345,5 @@ T02：2026-10-10 独立阶段审批 PASS；完整原基线尚未全绿，依 Pla
 2026-10-20 T16 独立阶段PASS：受控启动/退出、资源组装、独立产品 namespace、Windows 未签名便携目录及 CI/Docker 配置已实现。统一科研回归318/0、类型/构建/资源检查 exit0；后续目录检查修复最终 Node36/0，MCP8/0、33文件lint无错误/警告。最终仓库外服务的五类资源、包内 accountCommand 合成密码读取器+真实Bearer登录及停止后建账号、最终包双窗口/私有帧/上传/导出、已知秘密与标记扫描均通过；账户TTY与原生chooser未手工验收。Docker daemon 不可连接，容器/Linux、真实模型/文献公网仍未验证。独立 Spec→质量→文档一致性及阶段均PASS，授权提交后推进T17，不提前授权T18发布。见 evidence/T16-delivery.md。
 
 2026-10-20 T17本机收敛中：用户确认本机验收且暂时无模型连接。补入4个支持核心回归文件，最终435/0与Node36/0、类型/构建/资源通过；空资料目录成功空状态及真实公开U-Net PDF导入→证据/报告→实际Web同修订正文核对通过，均无模型调用。2.16MB同快照重复引用基准已实测，优化列P1。默认生产EuropePMC仍被本机虚拟DNS地址检查拒绝。当前修正及29项状态记录已独立规格/质量/文档PASS，批准checkpoint提交；T17未全PASS，不提前执行T18。
+
+2026-10-20 T18：用户随后明确要求README美化并公开源码，按PLAN22和独立终审PASS执行。公开仓库gtdd123/bio-evidence已创建，首次标准push main=e14fccd，22个提交和2094个tracked文件；提交后历史复扫无候选，README/三资产/许可证哈希与本地一致，GitHub实际横幅/表格/截图/Mermaid已核对。一行本地URL的GitHub自动链接排版修正也独立PASS；实际记录后续同步。CI已触发但未结束不计通过；T17缺口继续保留。
