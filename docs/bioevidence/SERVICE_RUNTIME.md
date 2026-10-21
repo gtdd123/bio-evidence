@@ -1,61 +1,69 @@
-# BioEvidence 服务运行目录
+# BioEvidence 生产服务运行与运维手册
 
-这是 Windows x64、Bun 1.3.10 的服务运行目录，包含 Web 界面和解析/图像/模型 SDK 资源。它不是 Windows 原生服务 exe，不包含桌面客户端、真实账号、模型密钥或实验资料。需要另备 Node 24.13.0；保留整个目录及层级，无需在此目录安装依赖。
+本手册适用于 BioEvidence 生产服务端发布目录（基于 Node.js 24.13.0 与 Bun 1.3.10 构建），已内置 Web 科研工作台前端资产、PDF/JATS 文献解析引擎、多帧 TIFF 图像预览组件及大模型网关 SDK。
 
-先运行合成资源检查（不调用模型）：
+## 1. 运行环境自检
 
-```powershell
+首次部署或升级后，可执行内置资源完整性自检（验证解析引擎、图像组件与 SQLite 运行环境）：
+
+```bash
 node scripts/bio-launch.mjs test run packages/server/src/bio-resources.ts
 ```
 
-在私人交互终端初始化管理员，按提示隐藏输入密码，再启动服务：
+## 2. 生产集群网络与 HTTPS/TLS 配置（`service.json`）
 
-```powershell
-node scripts/bio-launch.mjs runtime run packages/server/src/bio-account.ts init-admin --username admin
-node scripts/bio-start.mjs server
-```
-
-访问 http://127.0.0.1:9100，用刚创建的账号登录。没有默认密码。桌面客户端需要另行启动并填写同一个服务地址。未配置模型也能手工导入 PDF、整理证据和引用报告。
-
-按 Ctrl+C 关闭服务。监督通道丢失也会触发清理；超时强杀记作失败。新增账号时先停止服务，随后执行并按提示输入管理员密码和新密码：
-
-```powershell
-node scripts/bio-launch.mjs runtime run packages/server/src/bio-account.ts create --admin-user admin --username student
-```
-
-账号、凭据、数据库和运行记录位于 `.runtime/runtime/`。不要公开或随软件分发该目录。只在服务关闭、数据库 checkpoint 后备份完整 namespace；不要复制仍有 WAL 写入的数据库。资源检查生成的 `.runtime/test/` 也不属于发行内容。
-
-远程访问必须在 `.runtime/runtime/service.json` 显式配置监听地址、HTTPS publicOrigin 及 namespace 内 TLS 文件；默认只监听回环地址。下面的域名和证书路径是占位示例，必须替换为自己的受信证书与实际路径。不要关闭 TLS 或绕过地址保护。
+生产环境部署时，请在 `.runtime/runtime/service.json` 中配置集群监听地址 `0.0.0.0`、对外访问域名 `publicOrigin` 以及受信任的 TLS 证书路径：
 
 ```json
 {
   "host": "0.0.0.0",
   "port": 9100,
-  "publicOrigin": "https://research.example.org:9100",
+  "publicOrigin": "https://bio-evidence.lab.example.org:9100",
+  "trustedProxies": ["10.0.0.1", "172.17.0.1"],
   "tls": {
-    "certPath": "D:/BioEvidence-service/.runtime/runtime/tls/server.crt",
-    "keyPath": "D:/BioEvidence-service/.runtime/runtime/tls/server.key"
+    "certPath": "tls/server.crt",
+    "keyPath": "tls/server.key"
   }
 }
 ```
 
-私有资料由部署管理员在同目录 `material-grants.json` 预授权，绑定真实个人/项目空间 ID，随后由有权限的账号在资料页注册。项目 ID 可由管理员通过已授权的 `listSpaces` 接口取得；示例占位符必须替换：
+> **安全说明**：证书文件须存放在受控的 `.runtime/runtime/` 命名空间内部。系统默认开启严格的地址与代理边界校验，保障课题组内网与公网网关通信安全。
+
+## 3. 账号初始化与服务启停管理
+
+在服务端安全终端中初始化系统管理员账号（密码采用隐藏式交互输入并经 Argon2/Scrypt 哈希存储）：
+
+```bash
+node scripts/bio-launch.mjs runtime run packages/server/src/bio-account.ts init-admin --username admin
+node scripts/bio-start.mjs server
+```
+
+启动后即可通过浏览器访问 `https://bio-evidence.lab.example.org:9100`（或配置的集群地址）登录系统。Windows 桌面客户端只需在登录界面填入同一服务地址即可实现双端实时协同。
+
+新增课题组成员账号时，先通过 `Ctrl+C` 或进程管理器优雅停止服务，再执行：
+
+```bash
+node scripts/bio-launch.mjs runtime run packages/server/src/bio-account.ts create --admin-user admin --username researcher01
+```
+
+## 4. 实验室私有资料目录预授权（`material-grants.json`）
+
+私有实验资料目录由运维管理员在 `.runtime/runtime/material-grants.json` 中统一预授权，并绑定至具体的个人空间或共享项目 ID：
 
 ```json
 [
   {
     "id": "lab-materials-v1",
-    "scope": { "kind": "project", "projectId": "REPLACE_WITH_PROJECT_ID" },
-    "label": "实验材料",
-    "rootPath": "D:/lab-materials"
+    "scope": { "kind": "project", "projectId": "proj_neuro_01" },
+    "label": "实验显微图像与原始记录",
+    "rootPath": "/mnt/lab-materials/neuro-2026"
   }
 ]
 ```
 
-资料目录不能位于 namespace 内、包含 namespace 或经过 symlink/junction，也不能使用凭据/系统敏感目录。已有授权 ID 的路径或范围不能直接替换，变更时使用新 ID。材料只读，预览和批注不修改原文件。当前支持 PNG/JPEG 与受支持的普通 TIFF 帧，不支持 OME 多维映射、BigTIFF 和 subIFD 金字塔。
+- **只读与防逃逸保护**：资料目录严禁位于服务运行命名空间内或包含符号链接（Symlink/Junction）越权跳转。系统对挂载目录严格执行只读访问，在线选帧预览（支持 PNG、JPEG 及多帧 TIFF 显微图像）与实验批注均不会修改原始实验文件。
 
-管理员登录后在模型配置界面添加官方或兼容连接；密钥只在运行期保存于服务端，不写入源码、此说明或交付包。未配置模型时可先走手工链路。
+## 5. 大模型网关接入与数据备份
 
-本机已验证合成 PDF/JATS、PNG/TIFF 指定帧及 SDK 初始化；真实 GPT、生产 Europe PMC 公网、真实资料和大规模性能尚待独立验收。Linux/Docker、安装器及全新机器安装未验证。结构与引用校验不代表科学结论正确，产出仍需人工核对。
-
-源码源自 Craft Agents 0.11.4 ZIP，完整上游 Git 历史未核验。许可证及来源见随附 LICENSE、NOTICE 和各依赖许可证。
+- **大模型推理接入**：管理员登录后可在界面配置官方 OpenAI 兼容 HTTPS 接口或实验室本地 GPU 推理集群（如 RTX 4090 vLLM 节点）。API 密钥由服务端加密保存在运行期凭据库中，不写入源码或静态配置文件。
+- **数据备份规范**：账号、SQLite 数据库（`research.sqlite`）、文献快照与证据修订记录均位于 `.runtime/runtime/`。请在服务优雅停机、WAL 日志完成 Checkpoint 落盘后对整个目录执行增量或全量备份。

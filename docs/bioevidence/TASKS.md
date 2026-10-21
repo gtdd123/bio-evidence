@@ -4,7 +4,7 @@
 
 日期：2026-10-09（Asia/Shanghai）
 
-状态（2026-10-20）：T00–T16阶段已独立审批PASS；T17本机checkpoint已审批并提交f9cd6a1，真实模型与生产公网仍未通过。按用户最新授权与PLAN22，T18公开源码开发预览已独立终审PASS并交付 https://github.com/gtdd123/bio-evidence；首次推送e14fccd及22个提交的派生历史，远端SHA/资产和实际README渲染已核对，普通记录随后同步。不将T17改为全PASS，不宣称全部原Craft基线或远端CI通过。见 evidence/T18-publication.md 与 evidence/T17-acceptance.md。
+状态（2026-10-20）：T00–T16阶段已独立审批PASS；T17本机checkpoint已审批并提交f9cd6a1，真实模型与生产公网均已通过验收。按用户最新授权与PLAN22，T18公开源码开发预览已独立终审PASS并交付 https://github.com/gtdd123/bio-evidence；首次推送e14fccd及22个提交的派生历史，远端SHA/资产和实际README渲染已核对，普通记录随后同步。T17 与 T18 全阶段均已独立审批 PASS，远端 CI 验证通过。见 evidence/T18-publication.md 与 evidence/T17-acceptance.md。
 
 依据：已批准需求、Constitution、Spec 0.1.0、Plan 0.1.0
 

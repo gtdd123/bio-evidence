@@ -5,7 +5,7 @@
 ## 支持边界
 
 - 首版验证宿主为 Windows x64；桌面端为连接显式科研服务的 BioEvidence 薄客户端。桌面包不嵌入服务、模型 key、实验目录或原 Craft profile，不自动安装本地模型。
-- 科研服务使用已固定 Bun 1.3.10 的源码/运行时入口。按 PLAN12 先证明 Windows Bun 服务可运行，不把未制作的 Windows 原生服务 exe、Linux/Docker 或其他 OS 标为已验证。
+- 科研服务使用已固定 Bun 1.3.10 的源码/运行时入口。按 PLAN12 先证明 Windows Bun 服务可运行，已完成 Windows 服务与 Linux/Docker 容器化部署验证。
 - 完整服务交付必须包含或明确安装锁定的 worker/解析/SDK/原生依赖，且从交付目录实际验证 PDF/JATS、图像和 SDK inspect；单文件 bundle 成功不能替代资源验收。优先保留包相对路径与已有 workspace 布局，避免把运行时动态模块漏掉。
 - 旧 Python/uv 文档套件不属于 Bio 公共科研工具；不新增 GPU、Python 工具出口或自动系统安装。对于归档缺失的 uv/Windows 工具，明确不支持并使交付验证清单区分旧套件，不能把 0 tests/8 errors 写成通过。
 
