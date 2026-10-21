@@ -86,6 +86,34 @@
 .bio-file small { color:#7b8b92; font-size:11px; }
 .bio-file.is-active { background:#e9f4f1; color:#147d76; }
 .bio-material-image { max-width:100%; max-height:640px; object-fit:contain; align-self:center; background:#f0f3f5; border-radius:8px; }
+.bio-material-panel { gap:12px; }
+.bio-material-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+.bio-material-register,.bio-material-search { padding:7px 0; }
+.bio-material-register[open] { padding:14px; border:1px solid #dce3e6; background:#fff; border-radius:8px; }
+.bio-material-workbench { display:grid; grid-template-columns:minmax(175px,.8fr) minmax(260px,2fr) minmax(225px,1fr); gap:0; background:#fff; border:1px solid #dce3e6; border-radius:12px; overflow:hidden; margin-top:12px; align-items:stretch; }
+.bio-material-files,.bio-material-viewer,.bio-material-inspector { padding:20px; min-width:0; display:flex; flex-direction:column; gap:16px; }
+.bio-material-files { background:#f7faf9; border-right:1px solid #e1e9e6; }
+.bio-material-files .bio-files { margin:0 -10px; border:0; background:transparent; }
+.bio-material-files .bio-file { padding:12px 10px; gap:8px; border-radius:6px; align-items:flex-start; }
+.bio-material-files .bio-file span { overflow-wrap:anywhere; }
+.bio-material-files .bio-file small { white-space:nowrap; }
+.bio-material-path { font-size:11px; color:#65747d; overflow-wrap:anywhere; }
+.bio-material-section-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.bio-material-viewer { background:#fcfdfd; }
+.bio-material-viewer h3 { overflow-wrap:anywhere; }
+.bio-material-inspector { border-left:1px solid #e1e9e6; }
+.bio-material-inspector textarea { min-height:140px; }
+.bio-material-inspector .bio-editor { gap:12px; }
+.bio-material-inspector .bio-row > select { min-width:0; width:100%; }
+.bio-material-canvas { min-height:330px; display:flex; align-items:center; justify-content:center; background:#102b2b; border:1px solid #223c3b; border-radius:8px; overflow:hidden; color:#adc0bc; font-size:12px; flex:1; }
+.bio-material-canvas .bio-material-image { display:block; max-height:400px; width:100%; border-radius:0; background:transparent; }
+.bio-material-placeholder { grid-column:span 2; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:80px 30px; gap:15px; text-align:center; }
+.bio-frame-controls { display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap; }
+.bio-frame-position { display:flex; align-items:center; gap:7px; font-size:11px; color:#53626d; }
+.bio-frame-position input { width:56px; height:31px; padding:4px 6px; text-align:center; }
+.bio-frame-count { font-family:Consolas,monospace; font-size:11px; color:#147d76; white-space:nowrap; }
+@media(max-width:1250px) { .bio-material-workbench { grid-template-columns:minmax(160px,.65fr) minmax(260px,1.5fr); }.bio-material-inspector { grid-column:1 / -1; border-left:0; border-top:1px solid #e1e9e6; }.bio-material-placeholder { grid-column:auto; }.bio-material-files,.bio-material-viewer,.bio-material-inspector { padding:16px; } }
+@media(max-width:700px) { .bio-material-workbench { grid-template-columns:minmax(0,1fr); }.bio-material-files { border-right:0; border-bottom:1px solid #e1e9e6; }.bio-material-files .bio-files { max-height:220px; }.bio-material-canvas { min-height:240px; }.bio-material-placeholder { padding:50px 20px; } }
 .bio-model-row { display:grid; grid-template-columns:minmax(160px,1.5fr) 1fr 1fr auto; align-items:end; gap:14px; }
 @media(max-width:1000px) { .bio-main { padding:25px 22px 60px; }.bio-workspace { grid-template-columns:200px minmax(0,1fr); }.bio-two-columns { grid-template-columns:1fr; }.bio-beta { display:none; }.bio-login { gap:40px; padding:65px 35px; }.bio-login-intro h1 { font-size:38px; } }
 @media(max-width:700px) { .bio-header { height:auto; min-height:70px; padding:15px 18px; flex-wrap:wrap; }.bio-workspace { grid-template-columns:1fr; }.bio-sidebar { border-right:0; border-bottom:1px solid #dce3e6; }.bio-sidebar-bottom,.bio-sidebar .bio-create { display:none; }.bio-space { display:inline-flex; }.bio-login { grid-template-columns:1fr; padding:25px 20px; gap:25px; }.bio-login-intro h1 { font-size:33px; }.bio-login-form { padding:24px; }.bio-main { padding:24px 18px 60px; }.bio-model-row { grid-template-columns:1fr 1fr; }.bio-session-bar form { margin-left:0; } }
