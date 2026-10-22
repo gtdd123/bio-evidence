@@ -1,0 +1,58 @@
+name: Deploy BioEvidence Interactive Demo to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build_and_deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 24.13.0
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.13.0'
+
+      - name: Setup Bun 1.3.10
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.10'
+
+      - name: Register project-local runtime
+        shell: pwsh
+        run: node scripts/bio-prepare.mjs --bun (Get-Command bun).Source
+
+      - name: Install locked dependencies
+        run: node scripts/bio-launch.mjs install install --frozen-lockfile
+
+      - name: Build static interactive demo (dist-demo)
+        run: node scripts/bio-demo-build.mjs
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: 'apps/webui/dist-demo'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
