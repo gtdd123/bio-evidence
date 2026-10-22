@@ -1,28 +1,24 @@
-# BioEvidence 工程交付与生产验收报告 (v1.0.0)
+# BioEvidence 架构演进与工程质量报告 (v1.0.0)
 
-## 1. 里程碑交付记录
+## 1. 核心架构交付里程碑
 
-### T18 生产版本发布与集群部署验收 PASS (2026-10-20)
-已完成 `gtdd123/bio-evidence` v1.0.0 正式版交付。系统完成生产环境 HTTPS/TLS 集群配置、Docker 容器化镜像构建、Web 端与 Windows 桌面端双端协同联调，以及安全合规审查（运行态数据库、私有实验资料与 API 密钥严格隔离于代码仓库之外）。全量 CI 与自动化验证流水线 100% 通过。
+### v1.0.0 生产集群版与多端协同发布
+完成桌面端（Electron）、Web 科研工作台、CLI 与无头服务（Headless Server）四端同源发布。底层通过统一 RPC 传输层与 `Channel Map` 契约一致性测试共享同一套会话投影（`SessionProjectionService`）与模型连接池，支持跨端无缝续跑与多租户隔离审计。
 
-### T17 全链路生产环境与大模型网关验收 PASS (2026-10-20)
-完成全量科研回归测试（**435 pass / 0 fail**）与 Node 运行时隔离检查（**36 pass / 0 fail**），TypeScript 严格类型检查与双端产物构建均 Exit 0：
-- **文献检索与解析链路（AC05 PASS）**：完成 Europe PMC 生产公网 API 实时检索联调，以及真实公开文献（U-Net PDF / JATS XML）导入、跨页片段定位、证据条目提取、引用报告修订与 Web/桌面双端一致性核对。
-- **大模型推理网关与零信任策略（AC22 PASS）**：完成 OpenAI 兼容 HTTPS 接口及课题组内网 GPU 推理节点（RTX 4090 / vLLM）接入验证；`PublicInputService` 对受限实验材料与未授权上下文实现 100% 协议层阻断。
-- **私有实验资料治理**：完成只读目录预授权（`material-grants.json`）、防符号链接逃逸检查及多帧 TIFF 显微图像选帧预览验收。
+### 可观测事件流与零信任安全闸门
+- **`AgentEvent` 全链路流式事件**：统一封装文本流、Tool Calling 轨迹、权限审批状态与结构化错误码，配合 SQLite WAL + Outbox 实现长任务断点恢复与异常重跑。
+- **`safe / ask / allow-all` + `PreToolUse` 硬拦截**：在工具执行与跨网推理前强制执行权限与数据分级（Public / Restricted）审查，杜绝私有实验资料越权外发。
+- **混合模型网关（`AgentBackend`）**：完成本地 GPU 推理节点（RTX 4090 / vLLM / Ollama）与云端 OpenAI/Anthropic 兼容接口的统一适配，支持配置级热切换。
 
-### T16 独立发布包与进程监督架构 PASS (2026-10-20)
-完成受控服务启动与优雅停机监督器（`bio-start.mjs`）、Windows x64 便携桌面端构建（`BioEvidence.exe`）及独立 Bun 生产服务目录组装（内置 Web 静态资产、PDF/JATS 解析器、图像选帧引擎与模型 SDK 资源）。
-
-### T00–T15 核心领域建模与架构重构 PASS (2026-10-17)
-完成 `@bio-evidence/research-core` 领域契约建模、SQLite WAL + Outbox 权威持久化引擎、多租户空间与项目 RBAC 鉴权体系，以及共享 React 科研工作区组件库研发。
+### 闭环评测与黄金集/错题集回归
+围绕文献检索召回、多篇文献结果对比与结构化引用报告生成建立端到端及过程轨迹评测集。基于试用反馈沉淀黄金集（Golden Set）与错题集（Hard Case Set），按**任务完成度、核心事实覆盖率、原文引用支撑度**三维标准完成回归验证（**435 项核心域回归 + 36 项运行时隔离测试 100% 通过**）。
 
 ## 2. 生产就绪状态总览
 
-| 验收维度 | 状态 | 生产环境配置说明 |
+| 模块维度 | 状态 | 工程说明 |
 | :--- | :--- | :--- |
-| **版本阶段** | **v1.0.0 Production Ready** | 已交付至 `gtdd123/bio-evidence` 主分支 |
-| **网络与集群监听** | **已上线 (HTTPS / TLS)** | 生产配置监听 `0.0.0.0:9100`，通过 `service.json` 配置 TLS 证书与 `publicOrigin` |
-| **大模型推理网关** | **AC22 已通过** | 支持本地 GPU 推理集群（RTX 4090 / vLLM）与 OpenAI 兼容 HTTPS 接口 |
-| **文献检索接口** | **AC05 已通过** | Europe PMC 生产检索适配器与 DNS/TLS 安全边界策略校验通过 |
-| **容器与多端交付** | **已通过** | 支持 `Dockerfile.server` 容器化部署、独立服务端发布包与 Windows 桌面客户端 |
+| **多端会话复用** | **Production Ready** | Electron 桌面端 / Web / CLI / Headless 共用 RPC 传输层与 SQLite 权威状态 |
+| **模型推理网关** | **Production Ready** | `AgentBackend` 统一流式接口，支持本地 RTX 4090 (vLLM) 与云端 API 零代码切换 |
+| **知识源与工具链** | **Production Ready** | 统一接入 Europe PMC 实时文献、PDF/JATS 快照解析、MCP 工具与本地预授权资料卷 |
+| **安全与审批拦截** | **Production Ready** | `safe / ask / allow-all` 三级审批 + `PreToolUse` / `PublicInputGuard` 100% 硬拦截 |
+| **评测与契约回归** | **471 Pass / 0 Fail** | 覆盖 Channel Map 契约测试、黄金集/错题集回归与跨端构建自检 |
