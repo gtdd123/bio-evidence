@@ -20,9 +20,11 @@ function manifest(out: string): Plugin {
   } }
 }
 export function bioRendererConfig(web: boolean) {
-  const source = resolve(root, web ? 'apps/webui/src' : 'apps/electron/src/renderer'), out = resolve(root, web ? 'apps/webui/dist' : 'apps/electron/dist/renderer')
+  const demo = web && process.env.VITE_DEMO_MODE === 'true'
+  const output = web ? demo ? 'apps/webui/dist-demo' : 'apps/webui/dist' : 'apps/electron/dist/renderer'
+  const source = resolve(root, web ? 'apps/webui/src' : 'apps/electron/src/renderer'), out = resolve(root, output)
   // Vite may recursively empty only these exact, owned output folders.
-  const canonicalRoot = realpathSync.native(root), expected = resolve(canonicalRoot, web ? 'apps/webui/dist' : 'apps/electron/dist/renderer')
+  const canonicalRoot = realpathSync.native(root), expected = resolve(canonicalRoot, output)
   const samePath = (a: string, b: string) => process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
   if (!samePath(realpathSync.native(dirname(out)), dirname(expected)) || existsSync(out) && (lstatSync(out).isSymbolicLink() || !samePath(realpathSync.native(out), expected))) throw Error('Invalid Bio renderer output boundary')
   return defineConfig({ envDir: false, envPrefix: [], root: source, base: './',
@@ -37,6 +39,6 @@ export function bioRendererConfig(web: boolean) {
         'node:https', 'node:http', 'node:net', 'node:url', 'node:events', 'crypto', 'https', 'http', 'net', 'events', 'util', 'buffer', 'stream', 'node:stream', 'tls', 'node:tls', 'url', 'zlib', 'node:zlib', 'string_decoder', 'node:string_decoder', 'assert', 'node:assert']
         .map(name => [name, resolve(root, 'apps/webui/src/shims/node-builtins.ts')])),
     } },
-    define: { 'import.meta.env.IS_WEBUI': String(web) }, server: { host: '127.0.0.1', open: false, strictPort: true },
+    define: { 'import.meta.env.IS_WEBUI': String(web), 'import.meta.env.VITE_DEMO_MODE': String(demo) }, server: { host: '127.0.0.1', open: false, strictPort: true },
   })
 }

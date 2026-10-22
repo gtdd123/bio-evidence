@@ -21,6 +21,7 @@ outputs
 *.credentials
 credentials.enc
 **/dist
+**/dist-demo
 **/release
 **/vendor
 **/*.test.ts

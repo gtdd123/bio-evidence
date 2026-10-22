@@ -6,7 +6,7 @@ import type { PublicResearchRuntime } from '@craft-agent/shared/agent/backend/pu
 import type { SqliteResearchRepository } from './sqlite-repository'
 import type { PreparedPublicInput, PublicInputService, ResearchConnectionBroker } from './public-input'
 import type { PublicModelWorkerService } from './public-model-worker'
-import type { PublicModelAttempt } from './public-pi-protocol'
+import type { PublicModelAttempt, PublicExecutionControl } from './public-pi-protocol'
 export function validatePublicCandidate(prepared: PreparedPublicInput, purpose: 'evidence' | 'report', text: string): PublicCandidateResult {
   if (Buffer.byteLength(text) > 262144) throw new ResearchError('BIO_MODEL_BUDGET')
   let raw: unknown; try { raw = JSON.parse(text) } catch { throw new ResearchError('BIO_INPUT_INVALID') }
@@ -36,7 +36,7 @@ export class PublicModelExecutor {
     }
     return this.generatePrepared(actor, prepared, purpose, signal)
   }
-  async generatePrepared(actor: Actor, prepared: PreparedPublicInput, purpose: 'evidence' | 'report', signal?: AbortSignal, onAttempt?: (event: PublicModelAttempt) => Promise<void>): Promise<PublicCandidateResult> {
+  async generatePrepared(actor: Actor, prepared: PreparedPublicInput, purpose: 'evidence' | 'report', signal?: AbortSignal, onAttempt?: (event: PublicModelAttempt) => Promise<void>, control?: PublicExecutionControl): Promise<PublicCandidateResult> {
     const sessionId = parseContract(IdSchema, prepared.manifest.sessionId)
     let backend: ReturnType<typeof createBackend> | undefined
     try {
@@ -47,7 +47,7 @@ export class PublicModelExecutor {
         if (used || combined.aborted) throw new ResearchError('BIO_MODEL_UNAVAILABLE'); used = true
         prepared.assertCurrent()
         const { apiKey } = await broker.credentials(actor, prepared.manifest.scope, prepared.connection, prepared.assertCurrent)
-        const text = await worker.run(prepared, purpose, apiKey, combined, 'generate', onAttempt)
+        const text = await worker.run(prepared, purpose, apiKey, combined, 'generate', onAttempt, control)
         prepared.assertCurrent(); result = validatePublicCandidate(prepared, purpose, text)
         yield { type: 'text_complete', text: JSON.stringify(result) }; yield { type: 'complete' }
       } }

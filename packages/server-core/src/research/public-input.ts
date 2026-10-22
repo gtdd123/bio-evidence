@@ -9,7 +9,7 @@ function hash(value: unknown) { return createHash('sha256').update(JSON.stringif
 export interface SelectedResearchConnection {
   readonly credentialId?: string
   readonly slug: string; readonly revision: number; readonly fingerprint: string; readonly api: 'openai-responses' | 'openai-completions'; readonly baseUrl: string;
-  readonly model: { readonly id: string; readonly contextWindow: number; readonly maxOutputTokens: number }
+  readonly model: { readonly id: string; readonly contextWindow: number; readonly maxOutputTokens: number; readonly reasoning?: boolean }
 }
 export class ResearchConnectionBroker {
   constructor(private readonly repository: SqliteResearchRepository, private readonly readConnections: (actor: Actor, scope: ResearchScope) => unknown, private readonly readKey: (slug: string) => Promise<string | null>) {}

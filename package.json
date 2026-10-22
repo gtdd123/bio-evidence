@@ -109,7 +109,9 @@
     "prepare": "husky",
     "bio:resources": "node scripts/bio-launch.mjs test run packages/server/src/bio-resources.ts",
     "bio:server:package": "node scripts/bio-launch.mjs build run scripts/bio-server-package.ts",
-    "bio:desktop:package": "node scripts/bio-launch.mjs build run scripts/bio-desktop-package.ts"
+    "bio:desktop:package": "node scripts/bio-launch.mjs build run scripts/bio-desktop-package.ts",
+    "bio:demo:build": "node scripts/bio-demo-build.mjs",
+    "bio:demo:serve": "node scripts/bio-demo-serve.mjs"
   },
   "devDependencies": {
     "@aws-sdk/client-s3": "^3.947.0",

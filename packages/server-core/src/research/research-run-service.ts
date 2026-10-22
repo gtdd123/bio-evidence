@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { ResearchError, StartResearchRunSchema, PublicInputRequestSchema, SessionSchema, parseContract, type Actor, type JsonValue } from '@bio-evidence/research-core'
+import { ResearchError, StartResearchRunSchema, PublicInputRequestSchema, SessionSchema, DecideResearchToolSchema, parseContract, type Actor, type JsonValue } from '@bio-evidence/research-core'
 import type { StoredSession } from '@craft-agent/shared/sessions'
 import type { SqliteResearchRepository } from './sqlite-repository'
 import type { PublicInputService, PreparedPublicInput } from './public-input'
@@ -19,6 +19,7 @@ export class ResearchRunService {
   private closed = false
   private projectionCursor = ''
   private recovering: Promise<void> | undefined
+  private readonly approvals = new Map<string, (approved: boolean) => void>()
   constructor(private readonly repository: SqliteResearchRepository, private readonly inputs: PublicInputService,
     private readonly executor: Pick<PublicModelExecutor, 'generatePrepared'>, private readonly artifacts: ArtifactsService,
     private readonly sessions: ResearchSessionProjection, private readonly workspace: (id: string) => string) {}
@@ -28,7 +29,7 @@ export class ResearchRunService {
     const request = parseContract(StartResearchRunSchema, raw), replay = this.repository.researchRunReplay(actor, request)
     if (replay) return replay
     if (this.queue.size >= 32) throw new ResearchError('BIO_MODEL_BUDGET')
-    const { purpose, expectedRevision, operationId, retryOfRunId, ...input } = request
+    const { purpose, expectedRevision, operationId, retryOfRunId, executionMode, ...input } = request
     const prepared = this.inputs.prepare(actor, parseContract(PublicInputRequestSchema, input))
     const result = this.repository.beginResearchRun(actor, request, prepared)
     this.queue.set(result.run.id, { prepared, controller: new AbortController() })
@@ -43,6 +44,20 @@ export class ResearchRunService {
     this.repository.advanceRun(actor, id, 'cancelled', generation, null, Date.now())
     this.queue.get(id)?.controller.abort()
     return this.get(actor, id)
+  }
+  decideTool(actor: Actor, raw: unknown) {
+    const input = parseContract(DecideResearchToolSchema, raw)
+    this.repository.decideResearchTool(actor, input)
+    this.approvals.get(`${input.runId}:${input.requestId}`)?.(input.decision === 'approve')
+    return { runId: input.runId, requestId: input.requestId, decision: input.decision }
+  }
+  private waitApproval(id: string, requestId: string, signal: AbortSignal): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const key = `${id}:${requestId}`
+      const finish = (approved: boolean) => { clearTimeout(timer); signal.removeEventListener('abort', abort); this.approvals.delete(key); approved ? resolve() : reject(new ResearchError('BIO_ACCESS_DENIED')) }
+      const abort = () => finish(false), timer = setTimeout(abort, 45000)
+      this.approvals.set(key, finish); signal.addEventListener('abort', abort, { once: true }); if (signal.aborted) abort()
+    })
   }
   async idle(): Promise<void> { while (this.working) await this.working }
   async close(): Promise<void> {
@@ -106,6 +121,7 @@ export class ResearchRunService {
       this.repository.advanceRun(actor, id, 'running', generation, workerId, Date.now(), Date.now() + 240000)
       const record = this.repository.researchRunPreparation(actor, id)
       if (record.manifest.id !== prepared.manifest.id || record.manifest.contextHash !== prepared.manifest.contextHash || record.connectionFingerprint !== prepared.connection.fingerprint) throw new ResearchError('BIO_REVISION_CONFLICT')
+      this.repository.recordResearchTrace(authority(), id, generation, workerId, 'public-input-guard', 'guard', 'completed')
       monitor = setInterval(() => {
         try { authority() } catch {
           try { this.repository.interruptResearchRun(id) } catch { /* recover from the authoritative store after restart */ } finally { controller.abort() }
@@ -115,9 +131,16 @@ export class ResearchRunService {
       const candidate = reused ? validatePublicCandidate(prepared, record.request.purpose, JSON.stringify(reused.content)) : await this.executor.generatePrepared(actor, prepared, record.request.purpose, controller.signal, async event => {
         const current = authority()
         this.repository.recordResearchModelAttempt(current, id, generation, workerId, prepared.manifest.id, event)
-      })
+        this.repository.recordResearchTrace(current, id, generation, workerId, `model-${event.callId}`, 'model', event.phase === 'send' ? 'pending' : event.outcome === 'completed' ? 'completed' : 'failed')
+      }, { mode: record.request.executionMode ?? 'allow-all', toolEvent: async event => {
+        const tool = this.repository.recordResearchToolEvent(authority(), id, generation, workerId, event)
+        if (tool.state === 'pending') await this.waitApproval(id, event.id, controller.signal)
+        authority()
+      } })
       const current = authority()
+      this.repository.recordResearchTrace(current, id, generation, workerId, 'candidate-validation', 'validate', 'pending')
       this.repository.saveResearchCandidate(current, id, generation, workerId, candidate, prepared, reused ? record.request.retryOfRunId : undefined)
+      this.repository.recordResearchTrace(authority(), id, generation, workerId, 'candidate-validation', 'validate', 'completed')
       this.repository.completeResearchRun(current, id, generation, workerId, () => {
         prepared.assertCurrent()
         const reusable = reused ? this.repository.researchRetryArtifact(current, id) : undefined

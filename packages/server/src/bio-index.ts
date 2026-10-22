@@ -85,6 +85,8 @@ export async function startBioServer(options: { uiRoot?: string } = {}) {
       return current
     }
     const connections = new ResearchConnectionsService(repository, getCredentialManager(), currentActor)
+    const bootstrapActor = repository.bootstrapResearchAdministrator()
+    if (bootstrapActor) await new ResearchConnectionsService(repository, getCredentialManager()).initializeDefaults(bootstrapActor, process.env)
     const publicInputs = new PublicInputService(repository, connections.broker, { currentActor })
     const modelWorker = new PublicModelWorkerService()
     resources.modelWorker = modelWorker

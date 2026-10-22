@@ -133,3 +133,11 @@ test('mixed-case Node_Options cannot preload an owned synthetic hook in a real N
   assert.match(child.stdout, /safe-child-entered/);
   assert.equal(existsSync(marker), false);
 });
+
+test('only runtime admits named model settings; only the explicit demo boolean enters builds', () => {
+  const baseEnv = { OPENAI_API_KEY: 'synthetic-openai', DEEPSEEK_API_KEY: 'synthetic-deepseek', OPENAI_API_BASE_URL: 'https://gateway.example/v1', VITE_DEMO_MODE: 'true', VITE_SECRET: 'never-build' };
+  const spec = purpose => createLaunchSpec({ projectRoot, executable: join(projectRoot, '.tools', 'fake-bun.exe'), purpose, args: ['run','probe.ts'], baseEnv });
+  assert.equal(spec('runtime').env.DEEPSEEK_API_KEY, 'synthetic-deepseek');
+  for(const purpose of ['test','build','bootstrap','install']) { assert.equal(spec(purpose).env.OPENAI_API_KEY, undefined); assert.equal(spec(purpose).env.DEEPSEEK_API_KEY, undefined); assert.equal(spec(purpose).env.VITE_SECRET, undefined); }
+  assert.equal(spec('build').env.VITE_DEMO_MODE, 'true'); assert.equal(spec('test').env.VITE_DEMO_MODE, undefined);
+});

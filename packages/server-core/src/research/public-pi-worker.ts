@@ -21,7 +21,7 @@ try {
           if (pending.size > 1) { reject(new ResearchError('BIO_MODEL_UNAVAILABLE')); return }
           const id = randomUUID(); pending.set(id, { resolve, reject: () => reject(new ResearchError('BIO_ACCESS_DENIED')) }); send({ type: 'check', id, ...frame })
         })
-        const text = await runPublicPi(start.job, { inspect: start.mode === 'inspect', authorize: kind => check({ kind }), attempt: event => check({ kind: 'attempt', attempt: event }) })
+        const text = await runPublicPi(start.job, { inspect: start.mode === 'inspect', authorize: kind => check({ kind }), attempt: event => check({ kind: 'attempt', attempt: event }), toolEvent: event => check({ kind: 'tool-event', event }) })
         send({ type: 'result', text }); process.exit(0)
       })().catch(fail)
     } else {

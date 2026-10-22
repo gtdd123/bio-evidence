@@ -10,7 +10,7 @@ import type { DocumentIngestResult, SourceSnapshotPage } from './documents.ts';
 import { CreateEvidenceRequestSchema, SaveEvidenceRequestSchema, CreateReportRequestSchema, SaveReportRequestSchema,
   type EvidenceView, type ReportView, type ArtifactExport, type ArtifactPage } from './artifacts.ts';
 import { SaveResearchConnectionSchema, type ResearchConnectionView, type ResearchConnectionConfiguration } from './public-research.ts';
-import { StartResearchRunSchema, type ResearchRunView } from './runs.ts';
+import { StartResearchRunSchema, DecideResearchToolSchema, type ResearchRunView } from './runs.ts';
 
 export const RESEARCH_PROTOCOL_VERSION = 1 as const;
 export const RESEARCH_CHANNELS = {
@@ -37,6 +37,7 @@ export const RESEARCH_CHANNELS = {
   SAVE_REPORT: 'research:v1:saveReport', START_RUN: 'research:v1:startRun',
   CANCEL_RUN: 'research:v1:cancelRun', GET_RUN: 'research:v1:getRun',
   LIST_RUNS: 'research:v1:listRuns',
+  DECIDE_TOOL: 'research:v1:decideTool',
   EVENT: 'research:v1:event',
 } as const;
 export const CreateSessionSchema = z.strictObject({ scope: ScopeSchema, name: z.string().trim().min(1).max(300), sourceIds: IdListSchema.default([]) });
@@ -88,6 +89,7 @@ export const ResearchRequestSchemas = {
   [RESEARCH_CHANNELS.REVIEW_ARTIFACT]: z.strictObject({ kind: z.enum(['evidence', 'report']), revisionId: IdSchema, expectedRevision: RevisionSchema, decision: z.enum(['confirmed', 'needs-changes']) }),
   [RESEARCH_CHANNELS.CONFIRM_SOURCE_METADATA]: z.strictObject({ sourceId: IdSchema, expectedRevision: RevisionSchema }),
   [RESEARCH_CHANNELS.START_RUN]: StartResearchRunSchema,
+  [RESEARCH_CHANNELS.DECIDE_TOOL]: DecideResearchToolSchema,
   [RESEARCH_CHANNELS.CANCEL_RUN]: z.strictObject({ runId: IdSchema, expectedGeneration: GenerationSchema }),
   [RESEARCH_CHANNELS.GET_RUN]: z.strictObject({ runId: IdSchema }),
   [RESEARCH_CHANNELS.LIST_RUNS]: z.strictObject({ sessionId: IdSchema, pageSize: z.number().int().min(1).max(100).default(20), cursor: IdSchema.optional() }),
@@ -147,6 +149,7 @@ export interface ResearchRpcChannelMap {
   'research:v1:saveEvidence': { args: [ResearchRequest<'research:v1:saveEvidence'>]; result: EvidenceRevision };
   'research:v1:saveReport': { args: [ResearchRequest<'research:v1:saveReport'>]; result: ReportRevision };
   'research:v1:startRun': { args: [ResearchRequest<'research:v1:startRun'>]; result: ResearchRunView };
+  'research:v1:decideTool': { args: [ResearchRequest<'research:v1:decideTool'>]; result: { runId: string; requestId: string; decision: 'approve' | 'deny' } };
   'research:v1:cancelRun': { args: [ResearchRequest<'research:v1:cancelRun'>]; result: ResearchRunView };
   'research:v1:getRun': { args: [ResearchRequest<'research:v1:getRun'>]; result: ResearchRunView };
   'research:v1:listRuns': { args: [ResearchRequest<'research:v1:listRuns'>]; result: { items: ResearchRun[]; nextCursor?: string } };

@@ -1,0 +1,11 @@
+{
+  "synthetic": true,
+  "purpose": "UI demonstration only",
+  "sampleId": "DEMO-QC-001",
+  "biologicalMeasurements": false,
+  "checks": [
+    "file integrity",
+    "preview metadata"
+  ],
+  "status": "illustrative"
+}

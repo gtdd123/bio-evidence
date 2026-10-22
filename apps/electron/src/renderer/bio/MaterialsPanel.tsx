@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import type { ResearchScope, MaterialRoot, MaterialEntry, MaterialSearchResult, MaterialAnnotation } from '@bio-evidence/research-core'
 import { useBio, useBioT, useResource, useAction, useDraft, Button, Input, Textarea, Field, Tag, ErrorNotice } from './ui'
 import { materialNoteDraft, materialNoteContent } from './material-note-draft'
+import { DemoLabMaterials } from './DemoLabMaterials'
 import { MaterialPreviewController, type MaterialPreviewState } from './material-preview-state'
 export function MaterialsPanel({ scope, writable, canManage }: { scope: ResearchScope; writable: boolean; canManage: boolean }) {
   const { host } = useBio(), t = useBioT(), action = useAction(), [selected, setSelected] = useState(''), [cursor, setCursor] = useState<string>(), [grantId, setGrantId] = useState(''), [relativeDir, setRelativeDir] = useState('')
@@ -13,7 +14,7 @@ export function MaterialsPanel({ scope, writable, canManage }: { scope: Research
     {canManage && <details className="bio-material-register"><summary>{t('registerDirectory')}</summary><form className="bio-row" onSubmit={event => { event.preventDefault(); void action.act(async () => { const root = await host.research.registerMaterial({ grantId, relativeDir }); setSelected(root.id); setCursor(undefined); roots.reload() }) }}>
       <Field label={t('authorizedGrant')}><select value={grantId} required onChange={event => setGrantId(event.target.value)}><option value="">{t('chooseGrant')}</option>{grants.value?.map(grant => <option key={grant.id} value={grant.id}>{grant.label}</option>)}</select></Field><Field label={t('relativeDirectory')}><Input value={relativeDir} maxLength={4096} onChange={event => setRelativeDir(event.target.value)} placeholder={t('grantRootHint')} /></Field><Button disabled={action.busy}>{t('register')}</Button></form><p className="bio-muted">{t('grantsHelp')}</p></details>}
     <ErrorNotice error={roots.error || grants.error || action.error} />{root && <MaterialRootBrowser key={root.id} root={root} writable={writable} />}
-    {!roots.loading && !roots.error && roots.value && roots.value.items.length === 0 && !cursor && <p role="status" className="bio-muted">{t('noMaterialsConnected')}</p>}
+    {!roots.loading && !roots.error && !grants.error && roots.value && roots.value.items.length === 0 && !cursor && <DemoLabMaterials />}
   </div>
 }
 function MaterialRootBrowser({ root, writable }: { root: MaterialRoot; writable: boolean }) {

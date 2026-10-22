@@ -18,6 +18,7 @@ import {
   ResearchConnectionRecordSchema, type ResearchConnectionRecord,
   StartResearchRunSchema, PublicInputManifestSchema, ResearchRunViewSchema, type ResearchRunView,
   PublicModelInputSchema, PublicCandidateResultSchema, type PublicCandidateResult,
+  ResearchTraceSchema, ResearchToolEventSchema, DecideResearchToolSchema, assertPublicToolReference, type ResearchTrace,
 } from '@bio-evidence/research-core';
 import type { PreparedPublicInput } from './public-input.ts';
 import { resolveConfigDir, validateNamespacePath } from '@craft-agent/shared/config/namespace';
@@ -115,6 +116,11 @@ export class SqliteResearchRepository implements ResearchRepository {
     const user = this.query<Pick<UserRow, 'active' | 'administrator'>, [string]>('SELECT active,administrator FROM users WHERE id=?').get(input.userId);
     if (!user?.active || !input.active) throw new ResearchError('BIO_ACCESS_DENIED');
     return { ...input, active: true, administrator: user.administrator === 1 };
+  }
+  /** Startup-only identity; never exposed through RPC or used as a login. */
+  bootstrapResearchAdministrator(): Actor | undefined {
+    const row = this.query<{ id: string }, []>('SELECT id FROM users WHERE active=1 AND administrator=1 ORDER BY username LIMIT 1').get();
+    return row ? { userId: row.id, authSessionId: 'operator-bootstrap', active: true, administrator: true } : undefined;
   }
   private tx<T>(input: Actor, scope: ResearchScope | null, action: string, id: string | null, work: (actor: Actor) => T, outcome: 'success' | 'failed' = 'success'): T {
     const actor = parseContract(ActorSchema, input);
@@ -845,7 +851,7 @@ export class SqliteResearchRepository implements ResearchRepository {
           JSON.stringify(modelInput.evidence.map(item => item.id)) !== JSON.stringify(request.evidenceRevisionIds)) throw new ResearchError('BIO_REVISION_CONFLICT');
       const run = parseContract(RunSchema, { id: randomUUID(), sessionId: session.id, scope: session.scope, actorId: current.userId, connectionId: request.connectionId,
         state: 'queued', generation: 0, revision: 1, sourceIds: [...new Set(prepared.modelInput.blocks.map(block => block.sourceId))], artifactIds: [], createdAt: now, step: 'prepare' });
-      const payload = JSON.stringify({ request, manifest, modelInput, connectionFingerprint: prepared.connection.fingerprint });
+      const payload = JSON.stringify({ request, manifest, modelInput, connectionFingerprint: prepared.connection.fingerprint, connectionRevision: prepared.connection.revision });
       if (Buffer.byteLength(payload) > 262144) throw new ResearchError('BIO_MODEL_BUDGET');
       this.put(current, 'run', run);
       this.query('INSERT INTO run_steps VALUES(?,?,?,?)').run(run.id, 'prepare', 'completed', payload);
@@ -867,11 +873,12 @@ export class SqliteResearchRepository implements ResearchRepository {
     const prepared = this.researchRunPreparation(actor, id), request = prepared.request;
     const modelRequests = this.query<{ operation_id: string; state: string }, [string]>("SELECT operation_id,state FROM run_intents WHERE run_id=? AND operation_id LIKE 'model:%' ORDER BY operation_id LIMIT 5").all(id)
       .map(item => ({ callId: item.operation_id.slice(6), state: item.state }));
-    const steps = this.query<{ step_id: string; state: string }, [string]>("SELECT step_id,state FROM run_steps WHERE run_id=? AND step_id!='projection-proof' ORDER BY step_id LIMIT 9").all(id).map(row => ({ id: row.step_id, state: row.state }));
+    const steps = this.query<{ step_id: string; state: string }, [string]>("SELECT step_id,state FROM run_steps WHERE run_id=? AND step_id!='projection-proof' AND step_id NOT LIKE 'trace:%' ORDER BY step_id LIMIT 9").all(id).map(row => ({ id: row.step_id, state: row.state }));
+    const trace = this.researchTraceRows(id).map(item => ['pending', 'approved'].includes(item.state) && run.state !== 'running' ? { ...item, state: 'interrupted' as const } : item);
     const failure = this.query<{ payload: string }, [string]>("SELECT payload FROM run_steps WHERE run_id=? AND step_id='failure'").get(id);
     const projectionStatus = this.researchProjectionStatus(actor, run.sessionId, id), projectionPending = projectionStatus === 'pending';
     return parseContract(ResearchRunViewSchema, { run, operationId: request.operationId, purpose: request.purpose, manifest: prepared.manifest, input: prepared.modelInput, modelRequests, steps, projectionPending, projectionStatus,
-      ...(failure ? { errorCode: JSON.parse(failure.payload).errorCode } : {}) });
+      ...(prepared.connectionRevision ? { connectionRevision: prepared.connectionRevision } : {}), ...(request.executionMode ? { executionMode: request.executionMode } : {}), ...(trace.length ? { trace } : {}), ...(failure ? { errorCode: JSON.parse(failure.payload).errorCode } : {}) });
   }
   listResearchRuns(actor: Actor, sessionId: string, pageSize: number, cursor?: string) {
     parseContract(z.number().int().min(1).max(100), pageSize); if (cursor) parseContract(IdSchema, cursor);
@@ -887,7 +894,7 @@ export class SqliteResearchRepository implements ResearchRepository {
     this.get(actor, 'run', id);
     const row = this.query<{ payload: string }, [string]>("SELECT payload FROM run_steps WHERE run_id=? AND step_id='prepare'").get(id);
     if (!row || Buffer.byteLength(row.payload) > 262144) throw new ResearchError('BIO_STORAGE_UNAVAILABLE');
-    const record = parseContract(z.strictObject({ request: StartResearchRunSchema, manifest: PublicInputManifestSchema, modelInput: PublicModelInputSchema, connectionFingerprint: z.string().regex(/^[a-f0-9]{64}$/) }), JSON.parse(row.payload));
+    const record = parseContract(z.strictObject({ request: StartResearchRunSchema, manifest: PublicInputManifestSchema, modelInput: PublicModelInputSchema, connectionFingerprint: z.string().regex(/^[a-f0-9]{64}$/), connectionRevision: RevisionSchema.optional() }), JSON.parse(row.payload));
     if (record.manifest.contextHash !== digest(JSON.stringify(record.modelInput))) throw new ResearchError('BIO_STORAGE_UNAVAILABLE');
     return record;
   }
@@ -906,6 +913,51 @@ export class SqliteResearchRepository implements ResearchRepository {
     this.authorizeResource(actor, 'session', run.sessionId, 'execute');
     if (actor.userId !== run.actorId || run.state !== 'running' || run.generation !== generation || run.lease?.workerId !== workerId || run.lease.expiresAt <= now) throw new ResearchError('BIO_REVISION_CONFLICT');
     return run;
+  }
+  private researchTraceRows(id: string): ResearchTrace[] {
+    return parseContract(z.array(ResearchTraceSchema).max(64), this.query<{ payload: string }, [string]>("SELECT payload FROM run_steps WHERE run_id=? AND step_id LIKE 'trace:%' ORDER BY json_extract(payload,'$.sequence') LIMIT 65").all(id).map(row => JSON.parse(row.payload)));
+  }
+  private writeResearchTrace(id: string, scope: ResearchScope, revision: number, value: ResearchTrace) {
+    const record = parseContract(ResearchTraceSchema, value);
+    this.query('INSERT INTO run_steps VALUES(?,?,?,?) ON CONFLICT(run_id,step_id) DO UPDATE SET state=excluded.state,payload=excluded.payload').run(id, `trace:${record.id}`, record.state === 'failed' || record.state === 'denied' ? 'failed' : 'completed', JSON.stringify(record));
+    this.event(scope, 'run', id, revision);
+    return record;
+  }
+  recordResearchTrace(actor: Actor, id: string, generation: number, workerId: string, eventId: string, kind: 'guard' | 'model' | 'validate', state: 'pending' | 'completed' | 'failed', now = Date.now()): ResearchTrace {
+    const scope = this.binding('run', id);
+    return this.tx(actor, scope, 'research-trace', id, current => {
+      const run = this.assertResearchRunLease(current, id, generation, workerId, now), rows = this.researchTraceRows(id), old = rows.find(item => item.id === eventId);
+      if (old && (old.kind !== kind || old.state !== 'pending') || !old && rows.length >= 64) throw new ResearchError('BIO_REVISION_CONFLICT');
+      return this.writeResearchTrace(id, run.scope, run.revision, { id: eventId, sequence: old?.sequence ?? rows.length + 1, kind, state, startedAt: old?.startedAt ?? now, ...(state !== 'pending' ? { finishedAt: now } : {}) });
+    });
+  }
+  recordResearchToolEvent(actor: Actor, id: string, generation: number, workerId: string, raw: unknown, now = Date.now()): ResearchTrace {
+    const event = parseContract(ResearchToolEventSchema, raw), scope = this.binding('run', id);
+    return this.tx(actor, scope, 'research-tool', id, current => {
+      const run = this.assertResearchRunLease(current, id, generation, workerId, now), prepared = this.researchRunPreparation(current, id), rows = this.researchTraceRows(id), old = rows.find(item => item.id === event.id);
+      if (event.phase === 'request') {
+        const reference = assertPublicToolReference(event.reference, prepared.modelInput);
+        if (old || rows.length >= 64 || rows.filter(item => item.kind === 'tool').length >= 16 || prepared.request.executionMode === 'safe' || rows.some(item => item.kind === 'tool' && ['pending', 'approved'].includes(item.state))) throw new ResearchError('BIO_POLICY_DENIED');
+        return this.writeResearchTrace(id, run.scope, run.revision, { id: event.id, sequence: rows.length + 1, kind: 'tool', reference, startedAt: now, state: prepared.request.executionMode === 'ask' ? 'pending' : 'approved' });
+      }
+      if (!old || old.kind !== 'tool' || old.state !== 'approved') throw new ResearchError('BIO_REVISION_CONFLICT');
+      return this.writeResearchTrace(id, run.scope, run.revision, { ...old, state: event.isError ? 'failed' : 'completed', finishedAt: now });
+    });
+  }
+  authorizeResearchToolDecision(actor: Actor, id: string) {
+    const run = parseContract(RunSchema, this.get(actor, 'run', id));
+    this.authorizeResource(actor, 'session', run.sessionId, 'execute');
+    if (run.actorId !== actor.userId) throw new ResearchError('BIO_ACCESS_DENIED');
+    return run;
+  }
+  decideResearchTool(actor: Actor, raw: unknown, now = Date.now()): ResearchTrace {
+    const input = parseContract(DecideResearchToolSchema, raw), scope = this.binding('run', input.runId);
+    return this.tx(actor, scope, 'research-tool-decision', input.runId, current => {
+      const run = this.authorizeResearchToolDecision(current, input.runId), prepared = this.researchRunPreparation(current, run.id), old = this.researchTraceRows(run.id).find(item => item.id === input.requestId);
+      if (run.state !== 'running' || run.generation !== input.expectedGeneration || !run.lease || run.lease.expiresAt <= now || prepared.request.executionMode !== 'ask' || !old?.reference || old.state !== 'pending' || now - old.startedAt >= 45000) throw new ResearchError('BIO_REVISION_CONFLICT');
+      assertPublicToolReference(old.reference, prepared.modelInput);
+      return this.writeResearchTrace(run.id, run.scope, run.revision, { ...old, state: input.decision === 'approve' ? 'approved' : 'denied', ...(input.decision === 'deny' ? { finishedAt: now } : {}) });
+    });
   }
   recordResearchModelAttempt(actor: Actor, id: string, generation: number, workerId: string, manifestId: string, raw: unknown, now = Date.now()): void {
     const event = parseContract(z.discriminatedUnion('phase', [z.strictObject({ phase: z.literal('send'), callId: z.string().regex(/^call-[1-4]$/) }),

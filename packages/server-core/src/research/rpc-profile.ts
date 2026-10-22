@@ -35,6 +35,7 @@ export function registerResearchRpcProfile(server: WsRpcServer, repository: Rese
   }
   if (runs) {
     register(R.START_RUN, (current, input) => runs.start(current, input))
+    register(R.DECIDE_TOOL, (current, input) => runs.decideTool(current, input))
     register(R.GET_RUN, (current, input) => runs.get(current, input.runId))
     register(R.CANCEL_RUN, (current, input) => runs.cancel(current, input.runId, input.expectedGeneration))
     register(R.LIST_RUNS, (current, input) => runs.list(current, input.sessionId, input.pageSize, input.cursor))

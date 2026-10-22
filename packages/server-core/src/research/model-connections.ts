@@ -7,13 +7,32 @@ import { ResearchConnectionBroker } from './public-input'
 interface KeyStore { getLlmApiKey(id: string): Promise<string | null>; setLlmApiKey(id: string, value: string): Promise<void>; deleteLlmApiKey(id: string): Promise<unknown> }
 function deployment(record: ResearchConnectionRecord) { const { id, scope, policy, createdAt, updatedAt, ...configuration } = record; return configuration }
 function view(record: ResearchConnectionRecord): ResearchConnectionView { return parseContract(ResearchConnectionViewSchema, { slug: record.slug, name: record.name, providerType: record.providerType, revision: record.revision,
-  enabled: record.enabled, baseUrl: record.providerType === 'pi' ? 'https://api.openai.com/v1' : record.baseUrl, api: record.providerType === 'pi' ? 'openai-responses' : record.customEndpoint?.api, models: record.models, keyConfigured: !!record.credentialId }) }
+  ...(record.deployment ? { deployment: record.deployment } : {}), enabled: record.enabled, baseUrl: record.providerType === 'pi' ? 'https://api.openai.com/v1' : record.baseUrl, api: record.providerType === 'pi' ? 'openai-responses' : record.customEndpoint?.api, models: record.models, keyConfigured: !!record.credentialId }) }
 export class ResearchConnectionsService {
   readonly broker: ResearchConnectionBroker
   constructor(private readonly repository: SqliteResearchRepository, private readonly keys: KeyStore, private readonly currentActor: (actor: Actor) => Actor = actor => actor) {
     this.broker = new ResearchConnectionBroker(repository, (actor, scope) => repository.researchConnectionsForScope(this.currentActor(actor), scope).map(deployment), id => keys.getLlmApiKey(id))
   }
   list(actor: Actor, scope: ResearchScope): ResearchConnectionView[] { return this.repository.researchConnectionsForScope(this.currentActor(actor), scope).filter(item => item.enabled).map(view) }
+  /** Operator-only bootstrap. Existing records (including disabled ones) always win. */
+  async initializeDefaults(actor: Actor, env: Record<string, string | undefined>): Promise<void> {
+    actor = this.currentActor(actor)
+    if (!this.repository.currentAccount(actor).administrator) throw new ResearchError('BIO_ACCESS_DENIED')
+    const models = (value: string) => value.split(',').map(id => ({ id: id.trim(), contextWindow: 32000, maxOutputTokens: 4096, ...(id.includes('reasoner') ? { reasoning: true } : {}) }))
+    const scope = { kind: 'personal' as const, ownerId: actor.userId }
+    const defaults = [
+      { slug: 'openai-default', name: 'OpenAI GPT', key: env.OPENAI_API_KEY, base: env.OPENAI_API_BASE_URL, ids: env.OPENAI_MODELS ?? 'gpt-4o,gpt-4.1-mini', lab: false, official: !env.OPENAI_API_BASE_URL || env.OPENAI_API_BASE_URL.replace(/\/$/, '') === 'https://api.openai.com/v1' },
+      { slug: 'deepseek-default', name: 'DeepSeek', key: env.DEEPSEEK_API_KEY, base: 'https://api.deepseek.com/v1', ids: env.DEEPSEEK_MODELS ?? 'deepseek-chat,deepseek-reasoner', lab: false, official: false },
+      { slug: 'lab-default', name: 'Lab Intranet GPU', key: env.LAB_API_KEY, base: env.LAB_API_BASE_URL, ids: env.LAB_MODEL ?? '', lab: true, official: false },
+    ]
+    for (const item of defaults) {
+      if (this.repository.managedResearchConnection(actor, item.slug)) continue
+      const key = item.key || await this.keys.getLlmApiKey(item.slug)
+      if (!key) continue
+      await this.save(actor, { configuration: { slug: item.slug, name: item.name, authType: 'api_key', deployment: item.lab ? 'lab' : 'cloud', enabled: true, scopes: [scope], models: models(item.ids),
+        ...(item.official ? { providerType: 'pi', piAuthProvider: 'openai' } : { providerType: 'pi_compat', baseUrl: item.base, customEndpoint: { api: 'openai-completions' } }) }, expectedRevision: 0, apiKey: key })
+    }
+  }
   authorizeSaveRequest(actor: Actor, id: string): void {
     try {
       actor = this.currentActor(actor)
@@ -41,6 +60,7 @@ export class ResearchConnectionsService {
       actor = this.currentActor(actor)
       if (!this.repository.currentAccount(actor).administrator) throw new ResearchError('BIO_ACCESS_DENIED')
       const input = parseContract(SaveResearchConnectionSchema, raw), configuration = input.configuration
+      if (configuration.providerType === 'pi' && configuration.deployment === 'lab') throw new ResearchError('BIO_CONNECTION_INVALID')
       if (configuration.providerType === 'pi' ? configuration.piAuthProvider !== 'openai' || !!configuration.baseUrl || !!configuration.customEndpoint : !configuration.baseUrl || !configuration.customEndpoint || !!configuration.piAuthProvider) throw new ResearchError('BIO_CONNECTION_INVALID')
       if (configuration.baseUrl) { const url = new URL(configuration.baseUrl); if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) throw new ResearchError('BIO_CONNECTION_INVALID') }
       if (new Set(configuration.models.map(model => model.id)).size !== configuration.models.length || configuration.models.some(model => model.maxOutputTokens >= model.contextWindow)) throw new ResearchError('BIO_CONNECTION_INVALID')

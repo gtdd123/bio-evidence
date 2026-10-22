@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
 import { ResearchError, parseContract } from '@bio-evidence/research-core'
 import { buildNamespaceEnv, resolveConfigDir, validateNamespacePath } from '@craft-agent/shared/config/namespace.mjs'
-import { PublicPiStartSchema, PublicPiOutputSchema, type PublicModelAttempt } from './public-pi-protocol'
+import { PublicPiStartSchema, PublicPiOutputSchema, type PublicModelAttempt, type PublicExecutionControl } from './public-pi-protocol'
 import type { PreparedPublicInput } from './public-input'
 const Options = z.strictObject({ timeoutMs: z.number().int().min(100).max(180000).default(120000), workerPath: z.string().optional() })
 export class PublicModelWorkerService {
@@ -14,16 +14,16 @@ export class PublicModelWorkerService {
   private closed = false
   constructor(options: z.input<typeof Options> = {}) { this.options = Options.parse(options) }
   get activeProcessIds(): number[] { return [...this.children.keys()] }
-  async run(prepared: PreparedPublicInput, purpose: 'evidence' | 'report', apiKey: string, signal?: AbortSignal, mode: 'generate' | 'inspect' = 'generate', onAttempt?: (event: PublicModelAttempt) => Promise<void>): Promise<string> {
-    const pending = this.runTask(prepared, purpose, apiKey, signal, mode, onAttempt); this.pending.add(pending)
+  async run(prepared: PreparedPublicInput, purpose: 'evidence' | 'report', apiKey: string, signal?: AbortSignal, mode: 'generate' | 'inspect' = 'generate', onAttempt?: (event: PublicModelAttempt) => Promise<void>, control?: PublicExecutionControl): Promise<string> {
+    const pending = this.runTask(prepared, purpose, apiKey, signal, mode, onAttempt, control); this.pending.add(pending)
     try { return await pending } finally { this.pending.delete(pending) }
   }
-  private async runTask(prepared: PreparedPublicInput, purpose: 'evidence' | 'report', apiKey: string, signal?: AbortSignal, mode: 'generate' | 'inspect' = 'generate', onAttempt?: (event: PublicModelAttempt) => Promise<void>): Promise<string> {
+  private async runTask(prepared: PreparedPublicInput, purpose: 'evidence' | 'report', apiKey: string, signal?: AbortSignal, mode: 'generate' | 'inspect' = 'generate', onAttempt?: (event: PublicModelAttempt) => Promise<void>, control?: PublicExecutionControl): Promise<string> {
     if (this.closed || signal?.aborted) throw new ResearchError('BIO_MODEL_CANCELLED')
     if (this.children.size) throw new ResearchError('BIO_MODEL_UNAVAILABLE')
     prepared.assertCurrent()
     const { api, baseUrl, model } = prepared.connection
-    const start = parseContract(PublicPiStartSchema, { type: 'start', mode, job: { purpose, input: prepared.modelInput, apiKey, connection: { api, baseUrl, model } } })
+    const start = parseContract(PublicPiStartSchema, { type: 'start', mode, job: { purpose, input: prepared.modelInput, apiKey, connection: { api, baseUrl, model }, ...(control ? { executionMode: control.mode } : {}) } })
     const parent = validateNamespacePath(join(resolveConfigDir(), 'public-runs')); mkdirSync(parent, { recursive: true })
     const root = mkdtempSync(join(parent, 'run-')), rootReal = realpathSync.native(root), parentReal = realpathSync.native(parent)
     const inside = (value: string) => { const offset = relative(parentReal, value); return !!offset && offset !== '..' && !offset.startsWith(`..${sep}`) && !isAbsolute(offset) }
@@ -51,7 +51,7 @@ export class PublicModelWorkerService {
           let newline: number
           while ((newline = buffer.indexOf('\n')) >= 0) {
             const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1)
-            if (!line || ++count > 64 || text !== undefined) throw new ResearchError('BIO_MODEL_UNAVAILABLE')
+            if (!line || ++count > 160 || text !== undefined) throw new ResearchError('BIO_MODEL_UNAVAILABLE')
             const frame = parseContract(PublicPiOutputSchema, JSON.parse(line))
             if (frame.type === 'error') throw new ResearchError(frame.code)
             prepared.assertCurrent()
@@ -60,6 +60,7 @@ export class PublicModelWorkerService {
                 if (!onAttempt) throw new ResearchError('BIO_STORAGE_UNAVAILABLE')
                 await onAttempt(frame.attempt); prepared.assertCurrent()
               }
+              if (frame.kind === 'tool-event' && control) { await control.toolEvent(frame.event); prepared.assertCurrent() }
               sink.write(JSON.stringify({ type: 'allow', id: frame.id }) + '\n'); await sink.flush()
             }
             else text = frame.text

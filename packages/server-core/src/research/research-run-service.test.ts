@@ -17,18 +17,23 @@ const request = { sessionId: 'session', connectionId: 'official', model: 'synthe
 let repo: SqliteResearchRepository, runs: ResearchRunService, calls: number, release: (() => void) | undefined, projectFailure: boolean, snapshotFailure: boolean, signal: AbortSignal | undefined
 let root: string
 let projection: SessionProjectionService | undefined
+let requestTool = false
 beforeEach(() => {
   root = mkdtempSync(join(resolveConfigDir(), 't14-runs-'))
   repo = new SqliteResearchRepository(join(root, 'research.sqlite')); calls = 0; release = undefined; projectFailure = false; snapshotFailure = false; signal = undefined
-  projection = undefined
+  projection = undefined; requestTool = false
   repo.seedUser({ id: 'alice', username: 'alice', passwordHash: 'synthetic', active: true, administrator: false, revision: 1 })
   repo.put(actor, 'source', { id: 'source', scope, policy: 'public', provider: 'pdf-import', identifiers: {}, license: { status: 'unknown' }, createdAt: 1 })
   repo.put(actor, 'snapshot', { id: 'snapshot', sourceId: 'source', scope, policy: 'public', license: { status: 'unknown' }, format: 'pdf', acquiredBy: 'declared-public-pdf', retrievedAt: 1, contentHash: 'a'.repeat(64), coverage: { level: 'full', totalUnits: 1, units: [{ unit: 1, status: 'read' }] }, blocks: [{ id: 'block', unit: 1, text: 'Synthetic evidence', locator: { kind: 'pdf-page', page: 1 } }] })
   repo.put(actor, 'session', { id: 'session', scope, ownerId: actor.userId, name: 'Research', policy: 'public', selectedSourceIds: ['source'], revision: 1, createdAt: 1 })
   const broker = new ResearchConnectionBroker(repo, () => [{ slug: 'official', name: 'Official', providerType: 'pi', piAuthProvider: 'openai', authType: 'api_key', enabled: true, revision: 1, scopes: [scope], models: [{ id: 'synthetic-gpt', contextWindow: 32000, maxOutputTokens: 4096 }] }], async () => 'synthetic')
-  runs = new ResearchRunService(repo, new PublicInputService(repo, broker), { generatePrepared: async (_actor, prepared, _purpose, _signal, observer) => {
+  runs = new ResearchRunService(repo, new PublicInputService(repo, broker), { generatePrepared: async (_actor, prepared, _purpose, _signal, observer, control) => {
     signal = _signal
     calls++; await observer!({ phase: 'send', callId: 'call-1' })
+    if (requestTool) {
+      await control!.toolEvent({ phase: 'request', id: 'runtime-tool', reference: { name: 'get_public_block', arguments: { snapshotId: 'snapshot', blockId: 'block' } } })
+      await control!.toolEvent({ phase: 'completed', id: 'runtime-tool', isError: false })
+    }
     if (release) await new Promise<void>(resolve => { release = resolve })
     await observer!({ phase: 'received', callId: 'call-1', outcome: 'completed' })
     return { kind: 'evidence', content: { claim: prepared.modelInput.question, factSummary: '', limitations: '', missingInformation: [], citations: [{ snapshotId: 'snapshot', blockId: 'block', start: 0, end: 18, quote: 'Synthetic evidence' }] }, structuralStatus: 'structure-valid', reviewStatus: 'unreviewed' }
@@ -156,4 +161,21 @@ test('a later projected full snapshot covers earlier pending run messages across
   expect(repo.researchRunView(actor, first.run.id)).toMatchObject({ projectionPending: false, projectionStatus: 'covered' })
   expect(repo.researchRunView(actor, second.run.id)).toMatchObject({ projectionPending: false, projectionStatus: 'projected' })
   expect(readSessionJsonl(getSessionFilePath(join(root, 'workspace'), 'session'))?.messages).toHaveLength(4)
+})
+
+test('Ask queue waits for persisted owner approval, and cancellation releases a pending tool', async () => {
+  requestTool = true
+  const first = runs.start(actor, { ...request, executionMode: 'ask' })
+  const pending = async (id: string) => { const deadline = Date.now() + 2000; while (!runs.get(actor, id).trace?.some(item => item.id === 'runtime-tool' && item.state === 'pending')) { if (Date.now() > deadline) throw Error('Tool did not reach approval'); await new Promise(resolve => setTimeout(resolve, 10)) } }
+  await pending(first.run.id)
+  expect(runs.get(actor, first.run.id).modelRequests).toEqual([{ callId: 'call-1', state: 'pending' }])
+  runs.decideTool(actor, { runId: first.run.id, expectedGeneration: 0, requestId: 'runtime-tool', decision: 'approve' })
+  await runs.idle()
+  expect(runs.get(actor, first.run.id)).toMatchObject({ run: { state: 'completed' }, trace: [expect.objectContaining({ kind: 'guard' }), expect.objectContaining({ kind: 'model' }), expect.objectContaining({ kind: 'tool', state: 'completed' }), expect.objectContaining({ kind: 'validate' })] })
+  const second = runs.start(actor, { ...request, operationId: 'second-ask', executionMode: 'ask' })
+  await pending(second.run.id)
+  runs.cancel(actor, second.run.id, 0)
+  await runs.idle()
+  expect(runs.get(actor, second.run.id)).toMatchObject({ run: { state: 'cancelled' } })
+  expect(runs.get(actor, second.run.id).trace?.find(item => item.kind === 'tool')?.state).toBe('interrupted')
 })

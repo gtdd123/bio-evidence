@@ -5,7 +5,7 @@ import { RESEARCH_CHANNELS as R, ResearchRequestSchemas, ResearchEventSchema, Re
   MaterialImageResultSchema,
   LiteratureSelectionSchema, DocumentIngestResultSchema, EvidenceViewSchema, ReportViewSchema, ArtifactExportSchema, ArtifactPageSchema,
   ResearchConnectionViewSchema, ResearchConnectionConfigurationSchema, SourceSnapshotPageSchema,
-  ResearchRunViewSchema, ResearchRunPageSchema,
+  ResearchRunViewSchema, ResearchRunPageSchema, RunSchema,
   type Actor, type ResearchRepository, type ResearchRequestChannel, type ResearchScope,
 } from '@bio-evidence/research-core'
 import { getAllChannelValues } from '@craft-agent/shared/protocol'
@@ -117,6 +117,12 @@ export class ResearchAuthorizationGate implements TransportAuthorizationGate {
       case R.SELECT_SOURCE:
         if (!this.literature) throw new ResearchError('BIO_ACCESS_DENIED')
         this.literature.assertPublicSession(actor, input.sessionId as string); return
+      case R.DECIDE_TOOL: {
+        const run = parseContract(RunSchema, this.repository.get(actor, 'run', input.runId as string))
+        this.repository.authorizeResource(actor, 'session', run.sessionId, 'execute')
+        if (run.actorId !== actor.userId) throw new ResearchError('BIO_ACCESS_DENIED')
+        return
+      }
       case R.GET_RUN: case R.CANCEL_RUN:
         this.repository.authorizeResource(actor, 'run', input.runId as string, channel === R.CANCEL_RUN ? 'cancel' : 'read'); return
       case R.SEARCH: case R.START_RUN:
@@ -137,6 +143,7 @@ export class ResearchAuthorizationGate implements TransportAuthorizationGate {
   authorizeResponse(actor: Actor, channel: string, args: unknown[], result: unknown): void {
     this.authorizeRequest(actor, channel, args)
     const input = parseResearchRequest(channel, args[0]) as Record<string, unknown>
+    if (channel === R.DECIDE_TOOL && JSON.stringify(result) !== JSON.stringify({ runId: input.runId, requestId: input.requestId, decision: input.decision })) throw new ResearchError('BIO_ACCESS_DENIED')
     if (channel === R.LIST_SOURCE_SNAPSHOTS || channel === R.LIST_ARTIFACT_REVISIONS || channel === R.GET_MODEL_CONNECTION_CONFIGURATION) {
       const expected = channel === R.LIST_SOURCE_SNAPSHOTS ? this.snapshots?.list(actor, input.sourceId as string, input.pageSize as number, input.cursor as string | undefined)
         : channel === R.LIST_ARTIFACT_REVISIONS ? this.artifacts?.history(actor, input.kind as 'evidence' | 'report', input.entityId as string, input.pageSize as number, input.cursor as string | undefined)

@@ -84,6 +84,12 @@ export function createLaunchSpec({ projectRoot, executable, purpose, args, baseE
   env.CRAFT_DEBUG = '0';
   env = buildNamespaceEnv(env);
   env.NODE_ENV = purpose === 'build' ? 'production' : purpose === 'test' ? 'test' : 'development';
+  // Operator-supplied model configuration enters only the persistent runtime.
+  // Build/test environments and model subprocesses never inherit these values.
+  if (purpose === 'runtime') for (const key of ['OPENAI_API_KEY', 'DEEPSEEK_API_KEY', 'OPENAI_API_BASE_URL', 'OPENAI_MODELS', 'DEEPSEEK_MODELS', 'LAB_API_KEY', 'LAB_API_BASE_URL', 'LAB_MODEL']) {
+    if (typeof baseEnv[key] === 'string') env[key] = baseEnv[key];
+  }
+  if (purpose === 'build' && baseEnv.VITE_DEMO_MODE === 'true') env.VITE_DEMO_MODE = 'true';
   // Dependency preparation must not replace the project's reviewed Git hooks.
   if (purpose === 'install') env.HUSKY = '0';
   env.BUN_INSTALL_CACHE_DIR = join(root, '.runtime', 'cache', 'bun-install');

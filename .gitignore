@@ -73,7 +73,7 @@ credentials.enc
 .secrets
 .actrc
 
-# BioEvidence project-only tools and runtime data (T00)
+# BioEvidence project-only tools and runtime data
 /.tools/
 /.runtime/
 /.bio-evidence/
@@ -99,3 +99,4 @@ credentials.enc
 # Runtime JSONL histories belong under the ignored runtime roots above.
 # Synthetic, reviewed source fixtures are not globally ignored.
 .fixtures/
+/apps/webui/dist-demo/

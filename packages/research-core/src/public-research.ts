@@ -2,11 +2,11 @@ import { z } from 'zod'
 import { IdSchema, RevisionSchema, GenerationSchema, ScopeSchema, LocatorSchema, CitationSchema, CoverageSchema, ReportClaimSchema, nonBlankText } from './contracts'
 import { EvidenceEditContentSchema, CreateReportRequestSchema } from './artifacts'
 export const ResearchModelIdSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/)
-export const ResearchModelSchema = z.strictObject({ id: ResearchModelIdSchema, contextWindow: z.number().int().min(1024).max(2000000), maxOutputTokens: z.number().int().min(128).max(32000) })
+export const ResearchModelSchema = z.strictObject({ id: ResearchModelIdSchema, contextWindow: z.number().int().min(1024).max(2000000), maxOutputTokens: z.number().int().min(128).max(32000), reasoning: z.boolean().optional() })
 export const DeploymentModelConnectionSchema = z.strictObject({ slug: IdSchema, name: nonBlankText(120), providerType: z.enum(['pi', 'pi_compat']),
   piAuthProvider: z.literal('openai').optional(), authType: z.literal('api_key'), baseUrl: z.string().url().max(2000).optional(),
   customEndpoint: z.strictObject({ api: z.enum(['openai-responses', 'openai-completions']) }).optional(),
-  enabled: z.boolean(), revision: RevisionSchema, credentialId: IdSchema.optional(), scopes: z.array(ScopeSchema).min(1).max(1000), models: z.array(ResearchModelSchema).min(1).max(100) })
+  deployment: z.enum(['cloud', 'lab']).optional(), enabled: z.boolean(), revision: RevisionSchema, credentialId: IdSchema.optional(), scopes: z.array(ScopeSchema).min(1).max(1000), models: z.array(ResearchModelSchema).min(1).max(100) })
 export type DeploymentModelConnection = z.infer<typeof DeploymentModelConnectionSchema>
 export const ResearchConnectionRecordSchema = DeploymentModelConnectionSchema.extend({ id: IdSchema, scope: z.strictObject({ kind: z.literal('personal'), ownerId: IdSchema }),
   policy: z.literal('restricted'), credentialId: IdSchema, createdAt: GenerationSchema, updatedAt: GenerationSchema }).refine(value => value.id === value.slug && value.updatedAt >= value.createdAt)
@@ -14,7 +14,7 @@ export type ResearchConnectionRecord = z.infer<typeof ResearchConnectionRecordSc
 export const SaveResearchConnectionSchema = z.strictObject({ configuration: DeploymentModelConnectionSchema.omit({ revision: true, credentialId: true }), expectedRevision: GenerationSchema,
   apiKey: z.string().min(1).max(8192).regex(/^[^\x00-\x20\x7f]+$/).optional() })
 export const ResearchConnectionViewSchema = z.strictObject({ slug: IdSchema, name: nonBlankText(120), providerType: z.enum(['pi', 'pi_compat']), revision: RevisionSchema, enabled: z.boolean(),
-  baseUrl: z.string(), api: z.enum(['openai-responses', 'openai-completions']), models: z.array(ResearchModelSchema).max(100), keyConfigured: z.boolean() })
+  deployment: z.enum(['cloud', 'lab']).optional(), baseUrl: z.string(), api: z.enum(['openai-responses', 'openai-completions']), models: z.array(ResearchModelSchema).max(100), keyConfigured: z.boolean() })
 export type ResearchConnectionView = z.infer<typeof ResearchConnectionViewSchema>
 export const ResearchConnectionConfigurationSchema = z.strictObject({ configuration: SaveResearchConnectionSchema.shape.configuration,
   revision: RevisionSchema, keyConfigured: z.boolean() })

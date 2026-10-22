@@ -1,9 +1,10 @@
 import { defineConfig } from 'vite'
+import { bioRendererConfig } from '../../scripts/bio-vite-config'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { resolve } from 'path'
 
-export default defineConfig({
+export default process.env.VITE_DEMO_MODE === 'true' ? bioRendererConfig(true) : defineConfig({
   envDir: false,
   envPrefix: [],
   plugins: [

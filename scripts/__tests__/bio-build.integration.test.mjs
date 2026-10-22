@@ -26,16 +26,17 @@ function fixture(t) {
   });
   return folder;
 }
-function run(folder, args) {
+function run(folder, args, demo = false) {
   const spec = createLaunchSpec({ projectRoot: root, executable: readPinnedRuntime(root), purpose: 'build', args });
   const namespace = join(folder, 'namespace');
   const env = buildNamespaceEnv({ ...spec.env, BIOEVIDENCE_CONFIG_DIR: namespace, CRAFT_CONFIG_DIR: namespace });
   for (const dir of [namespace, ...Object.values(getSdkPaths(env)), env.TEMP]) mkdirSync(dir, { recursive: true });
   // Only synthetic pressure inputs: real inherited business secrets were already
   // removed by createLaunchSpec. Values are not printed, even on test failure.
-  for (const key of ['SLACK_OAUTH_CLIENT_SECRET', 'MICROSOFT_OAUTH_CLIENT_SECRET', 'OPENAI_API_KEY', 'SENTRY_ELECTRON_INGEST_URL', 'VITE_TOKEN']) {
+  for (const key of ['SLACK_OAUTH_CLIENT_SECRET', 'MICROSOFT_OAUTH_CLIENT_SECRET', 'OPENAI_API_KEY', 'DEEPSEEK_API_KEY', 'LAB_API_KEY', 'SENTRY_ELECTRON_INGEST_URL', 'VITE_TOKEN']) {
     env[key] = `${MARKER}${key}`;
   }
+  if (demo) env.VITE_DEMO_MODE = 'true';
   const child = spawnSync(spec.executable, spec.args, { cwd: folder, env, encoding: 'utf8', windowsHide: true, timeout: 60000 });
   if (child.status !== 0) {
     console.log((child.stderr || '').replace(/BIO_SYNTHETIC_BUILD_VALUE_[A-Z_]+/g, '[synthetic]').slice(-2500));
@@ -72,20 +73,20 @@ test('actual Electron main builder emits no synthetic secret or telemetry endpoi
   assertClean(join(folder, 'apps/electron/dist'));
 });
 
-for (const client of ['electron', 'webui']) {
+for (const client of ['electron', 'webui', 'bio-demo']) {
   test(`actual Vite ${client} config does not expose inherited VITE credentials or dotenv values`, t => {
     const folder = fixture(t);
     write(join(folder, 'index.html'), '<html><body><script type="module" src="/probe.js"></script></body></html>');
     write(join(folder, 'probe.js'), 'document.body.dataset.probe = JSON.stringify([import.meta.env.VITE_TOKEN, import.meta.env.VITE_OTHER]);');
     write(join(folder, '.env'), `VITE_OTHER=${MARKER}DOTENV`);
-    const configPath = join(root, `apps/${client}/vite.config.ts`).replaceAll('\\', '/');
+    const configPath = join(root, client === 'bio-demo' ? 'apps/webui/vite.config.ts' : `apps/${client}/vite.config.ts`).replaceAll('\\', '/');
     const output = join(folder, 'dist');
     // Real production environment policy, Vite engine and aliases. The tiny JS
     // fixture has no React/Babel needs, so UI plugins are not executed here;
     // full application builds are checked separately after this safety gate.
     write(join(folder, 'vite.config.ts'), `import base from ${JSON.stringify(configPath)}; export default { ...base, root: ${JSON.stringify(folder)}, plugins: [], build: { ...base.build, outDir: ${JSON.stringify(output)}, rollupOptions: { input: ${JSON.stringify(join(folder, 'index.html'))} } } };`);
     write(join(folder, 'vite-run.mjs'), `import { build } from ${JSON.stringify(join(root, 'node_modules/vite/dist/node/index.js').replaceAll('\\', '/'))}; await build({ configFile: ${JSON.stringify(join(folder, 'vite.config.ts'))} });`);
-    const child = run(folder, ['run', join(folder, 'vite-run.mjs')]);
+    const child = run(folder, ['run', join(folder, 'vite-run.mjs')], client === 'bio-demo');
     assert.equal(child.status, 0, `Fixture Vite failed (exit ${child.status}); no child payloads logged`);
     assertClean(output);
   });

@@ -72,3 +72,27 @@ test('large accumulated history is rejected before reading source content', () =
   for (let index = 0; index < 5; index++) repo.appendProjection(actor, 'session', `history-${index}`, [{ id: 'message', role: 'user', content: 'a'.repeat(2 * 1024 * 1024), timestamp: 1 }], 0)
   expect(() => prepared.assertCurrent()).toThrow(expect.objectContaining({ code: 'BIO_MODEL_BUDGET' }))
 })
+
+test('Ask approvals bind the current owner, generation, concrete reference and one pending request', () => {
+  const { run } = repo.beginResearchRun(actor, { ...input, executionMode: 'ask' }, prepared, 10)
+  repo.advanceRun(actor, run.id, 'running', 0, 'worker', 11, 100000)
+  const request = { phase: 'request', id: 'tool-request', reference: { name: 'get_public_block', arguments: { snapshotId: 'snapshot', blockId: 'block' } } }
+  expect(repo.recordResearchToolEvent(actor, run.id, 0, 'worker', request, 12).state).toBe('pending')
+  expect(() => repo.recordResearchToolEvent(actor, run.id, 0, 'worker', { phase: 'completed', id: 'tool-request', isError: false }, 13)).toThrow()
+  expect(() => repo.decideResearchTool(actor, { runId: run.id, expectedGeneration: 1, requestId: 'tool-request', decision: 'approve' }, 13)).toThrow()
+  repo.decideResearchTool(actor, { runId: run.id, expectedGeneration: 0, requestId: 'tool-request', decision: 'approve' }, 14)
+  expect(() => repo.decideResearchTool(actor, { runId: run.id, expectedGeneration: 0, requestId: 'tool-request', decision: 'deny' }, 15)).toThrow()
+  repo.recordResearchToolEvent(actor, run.id, 0, 'worker', { phase: 'completed', id: 'tool-request', isError: false }, 16)
+  expect(repo.researchRunView(actor, run.id)).toMatchObject({ executionMode: 'ask', trace: [{ id: 'tool-request', state: 'completed', startedAt: 12, finishedAt: 16 }] })
+  expect(repo.researchRunView(actor, run.id).steps).toEqual([{ id: 'prepare', state: 'completed' }])
+})
+test('tool references outside the frozen manifest and expired or cancelled approvals are denied', () => {
+  const { run } = repo.beginResearchRun(actor, { ...input, executionMode: 'ask' }, prepared, 10)
+  repo.advanceRun(actor, run.id, 'running', 0, 'worker', 11, 100000)
+  expect(() => repo.recordResearchToolEvent(actor, run.id, 0, 'worker', { phase: 'request', id: 'wrong', reference: { name: 'get_public_block', arguments: { snapshotId: 'private', blockId: 'block' } } }, 12)).toThrow()
+  repo.recordResearchToolEvent(actor, run.id, 0, 'worker', { phase: 'request', id: 'request', reference: { name: 'get_public_block', arguments: { snapshotId: 'snapshot', blockId: 'block' } } }, 12)
+  expect(() => repo.decideResearchTool(actor, { runId: run.id, expectedGeneration: 0, requestId: 'request', decision: 'approve' }, 45013)).toThrow()
+  repo.advanceRun(actor, run.id, 'cancelled', 0, null, 45014)
+  expect(repo.researchRunView(actor, run.id).trace?.[0]?.state).toBe('interrupted')
+  expect(() => repo.decideResearchTool(actor, { runId: run.id, expectedGeneration: 1, requestId: 'request', decision: 'approve' }, 45015)).toThrow()
+})
